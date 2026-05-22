@@ -6,6 +6,7 @@ from urllib.parse import urljoin, urlparse
 
 import requests
 from bs4 import BeautifulSoup
+from collections import defaultdict
 
 USER_AGENT = (
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
@@ -31,85 +32,12 @@ EVENT_KEYWORDS = (
     "happening",
 )
 
-LUXURY_KEYWORDS = (
-    "luxury",
-    "5-star",
-    "five star",
-    "premium",
-    "exclusive",
-    "fine dining",
-    "spa",
-    "suite",
-    "concierge",
-    "resort",
-    "private beach",
-    "michelin",
-)
-
-BUDGET_KEYWORDS = (
-    "budget",
-    "affordable",
-    "economy",
-    "value",
-    "low cost",
-    "hostel",
-    "basic",
-    "best price",
-    "discount",
-    "deal",
-)
-
-CUSTOMER_SEGMENTS = {
-    "business travelers": (
-        "business",
-        "corporate",
-        "meeting room",
-        "conference",
-        "work desk",
-        "airport shuttle",
-    ),
-    "families": (
-        "family",
-        "kids",
-        "children",
-        "family room",
-        "play area",
-        "child-friendly",
-    ),
-    "couples": (
-        "romantic",
-        "honeymoon",
-        "couple",
-        "anniversary",
-        "wedding",
-    ),
-    "luxury leisure travelers": (
-        "spa",
-        "resort",
-        "wellness",
-        "fine dining",
-        "luxury",
-        "private",
-    ),
-    "budget-conscious travelers": (
-        "budget",
-        "affordable",
-        "value",
-        "deal",
-        "discount",
-        "economy",
-    ),
-}
-
-DATE_PATTERNS = (
-    r"\b(?:jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)[a-z]*[\s,.-]+\d{1,2}(?:[\s,.-]+\d{4})?\b",
-    r"\b\d{1,2}[/-]\d{1,2}(?:[/-]\d{2,4})?\b",
-    r"\b\d{4}[/-]\d{1,2}[/-]\d{1,2}\b",
-)
 
 
-def _normalize_text(text: str) -> str:
-    return re.sub(r"\s+", " ", text).strip()
+
+def normalize_keep_newlines(text: str) -> str:
+    lines = [re.sub(r"[ \t]+", " ", line).strip() for line in text.splitlines()]
+    return "\n".join(lines)
 
 
 def _is_same_domain(base_url: str, candidate_url: str) -> bool:
@@ -118,14 +46,18 @@ def _is_same_domain(base_url: str, candidate_url: str) -> bool:
 
 def _extract_internal_links(base_url: str, soup: BeautifulSoup) -> Set[str]:
     links: Set[str] = set()
+    link_to_name = {}
     for a_tag in soup.find_all("a", href=True):
+        link_name = a_tag.get_text(" ", strip = True)
         href = a_tag["href"].strip()
         if href.startswith("#") or href.startswith("mailto:") or href.startswith("tel:"):
             continue
         absolute = urljoin(base_url, href)
         if _is_same_domain(base_url, absolute):
-            links.add(absolute.split("#")[0])
-    return links
+            link = absolute.split("#")[0]
+            links.add(link)
+            link_to_name[link] = link_name
+    return links, link_to_name
 
 
 def _fetch_page(url: str) -> Tuple[str, BeautifulSoup]:
@@ -152,159 +84,142 @@ def _pick_next_links(links: Set[str]) -> List[str]:
     scored.sort(key=lambda item: item[0], reverse=True)
     return [link for _, link in scored]
 
-def _clean_content_without_a(soup):
+
+
+
+def _clean_content(soup):
     for tag in soup.select(
         "script, style, noscript, svg, iframe, "
         "header, nav, footer, aside, "
         "[role='navigation'], [role='contentinfo']"
     ):
         tag.decompose()
+
+    # remove booking availability form and sales link sections
+    for tag in soup.select("form[name='availabilitysearchform']"):
+        tag.decompose()
+    for tag in soup.select("section[id*='sale' i]"):
+        tag.decompose()
+
+    # remove common reservation widgets and chat launchers
+    for tag in soup.select(
+        "[id*='booking' i], [class*='booking' i], "
+        "[id*='reservation' i], [class*='reservation' i], "
+        "[id*='availability' i], [class*='availability' i], "
+        "[id*='chat' i], [class*='chat' i], "
+        "[id*='contact' i], [class*='contact' i], "
+        "[id*='enquiry' i], [class*='enquiry' i], [name*='enquiry' i], "
+        "[id*='search' i], [class*='search' i], [name*='search' i]"
+    ):
+        tag.decompose()
+    
+    # remove language menu and currency menu
+    for tag in soup.select(
+        "li[class*='language' i], ul[class*='language' i], "
+        "li[class*='currencies' i], ul[class*='currencies' i], "
+        "li[class*='currency' i], ul[class*='currency' i]"
+    ):
+        tag.decompose()
     
     # delete common cookie/banner popup（based on class/id keyword）
-    noisy_keywords = ("cookie", "consent", "banner", "popup", "modal", "subscribe")
+    noisy_keywords = (
+        "cookie",
+        "consent",
+        "banner",
+        "popup",
+        "modal",
+        "subscribe",
+        "newsletter",
+        "floating",
+        "drawer",
+    )
+    # tags that are allowed to be removed by keyword rule
+    removable_tags = {"div", "section", "aside", "form", "dialog"}
+    # never remove these structural roots
+    protected_tags = {"html", "body", "main", "article"}
+
     to_remove = []
     for tag in soup.find_all(True):
+        if tag.name in protected_tags or tag.name not in removable_tags:
+            continue
+
         joined = " ".join(tag.get("class", [])) + " " + (tag.get("id") or "")
         low = joined.lower()
-        if any(k in low for k in noisy_keywords):
+        text_len = len(tag.get_text(" ", strip=True))
+
+        # keyword hit + short content => likely popup/widget noise
+        if any(k in low for k in noisy_keywords) and text_len < 800:
             to_remove.append(tag)
+
     for tag in to_remove:
         tag.decompose()
 
-    text = soup.get_text(" ", strip=True)
-    text = _normalize_text(text)
+    text = soup.get_text("\n", strip=True)
+    text = normalize_keep_newlines(text)
     return text
 
 
-def _collect_site_content(base_url: str, max_pages: int = MAX_PAGES) -> Dict[str, str]:
+def collect_site_content(base_url: str, max_pages: int = MAX_PAGES):
     queue = deque([base_url])
+    link_queue = deque(["home"])
     visited: Set[str] = set()
     visited.add(base_url)
     succeeded = set()
     pages: Dict[str, str] = {}
 
+    # return event_contnt, always check this first, then whole pages for events
+    # no link to events or meeting, likely not considered
+
+    key_words = ["event", "meeting", "conference", "venue",
+                 "promotion", "news", 
+                 "about", 
+                 "facility", "facilities", "amenities", "amenity", "services",
+                 "dining"]
+
+    classified_results = defaultdict(list)
+    seen_by_key = defaultdict(set)
+
     while queue and len(succeeded) < max_pages:
         current = queue.popleft()
+        link_name = link_queue.popleft()
         try:
             _, soup = _fetch_page(current)
             succeeded.add(current)
         except requests.RequestException:
             print("request failed")
             continue
-        text = _clean_content_without_a(soup) # get all text within tags for this page
+        
+        soup_for_text = BeautifulSoup(str(soup), "html.parser")
+        text = _clean_content(soup_for_text) 
+        # locate the content if content in class,  
+        # check keyword in url
+
+        if text:
+            if link_name == "home":
+                classified_results["about"].append(text)
+            for key in key_words:
+                if (key in current or key in link_name.lower()) and text not in seen_by_key[key]:
+                    seen_by_key[key].add(text)
+                    classified_results[key].append(text)
+
         pages[current] = text[:40000]
-        links = _extract_internal_links(base_url, soup)
+        links, link_to_name = _extract_internal_links(base_url, soup)
         ranked =  _pick_next_links(links)
         for link in ranked:
             if link not in visited and len(queue) < max_pages * 2:
                 visited.add(link)
                 queue.append(link)
-    return pages
+                link_name = link_to_name[link]
+                link_queue.append(link_name)
+
+    return pages, classified_results
 
 
-def _extract_recent_events(pages: Dict[str, str], top_n: int = 5) -> List[Dict[str, str]]:
-    now = datetime.now()
-    found_events: List[Dict[str, str]] = []
-    event_trigger = re.compile("|".join(EVENT_KEYWORDS), re.IGNORECASE)
-
-    for url, text in pages.items():
-        if not event_trigger.search(text):
-            continue
-        snippets = re.split(r"(?<=[.!?])\s+", text)
-        for snippet in snippets:
-            if not event_trigger.search(snippet):
-                continue
-            matched_date = ""
-            for pattern in DATE_PATTERNS:
-                date_match = re.search(pattern, snippet, re.IGNORECASE)
-                if date_match:
-                    matched_date = date_match.group(0)
-                    break
-            if matched_date:
-                # Keep only events likely from current or previous year.
-                year_match = re.search(r"\b(20\d{2})\b", matched_date)
-                if year_match:
-                    year_val = int(year_match.group(1))
-                    if year_val < now.year - 1:
-                        continue
-            found_events.append(
-                {
-                    "source_url": url,
-                    "date_hint": matched_date,
-                    "event_summary": snippet[:260],
-                }
-            )
-
-    # Deduplicate by summary text.
-    dedup = []
-    seen = set()
-    for event in found_events:
-        key = event["event_summary"].lower()
-        if key not in seen:
-            seen.add(key)
-            dedup.append(event)
-    return dedup[:top_n]
-
-
-def _classify_hotel_style(combined_text: str) -> Dict[str, object]:
-    lower_text = combined_text.lower()
-    luxury_hits = sum(1 for keyword in LUXURY_KEYWORDS if keyword in lower_text)
-    budget_hits = sum(1 for keyword in BUDGET_KEYWORDS if keyword in lower_text)
-
-    if luxury_hits >= budget_hits + 2:
-        label = "luxury"
-        confidence = min(1.0, 0.45 + luxury_hits * 0.08)
-    elif budget_hits >= luxury_hits + 2:
-        label = "economy"
-        confidence = min(1.0, 0.45 + budget_hits * 0.08)
-    else:
-        label = "midscale / mixed"
-        confidence = 0.5
-
-    evidence = [
-        keyword
-        for keyword in (LUXURY_KEYWORDS + BUDGET_KEYWORDS)
-        if keyword in lower_text
-    ][:10]
-    return {
-        "label": label,
-        "confidence": round(confidence, 2),
-        "evidence_keywords": evidence,
-        "score": {
-            "luxury_hits": luxury_hits,
-            "economy_hits": budget_hits,
-        },
-    }
-
-
-def _infer_customer_segments(combined_text: str, top_n: int = 3) -> List[Dict[str, object]]:
-    lower_text = combined_text.lower()
-    segment_scores = Counter()
-    segment_evidence: Dict[str, List[str]] = {}
-
-    for segment, keywords in CUSTOMER_SEGMENTS.items():
-        matches = [keyword for keyword in keywords if keyword in lower_text]
-        if matches:
-            segment_scores[segment] = len(matches)
-            segment_evidence[segment] = matches
-
-    results = []
-    for segment, score in segment_scores.most_common(top_n):
-        confidence = min(1.0, 0.35 + score * 0.15)
-        results.append(
-            {
-                "segment": segment,
-                "confidence": round(confidence, 2),
-                "evidence_keywords": segment_evidence.get(segment, [])[:6],
-            }
-        )
-    return results
 
 
 def scrape_hotel_website_summary(
     website_url: str,
-    max_pages: int = MAX_PAGES, 
-    recent_events: int = 5
+    max_pages: int = MAX_PAGES,
 ) -> Dict[str, object]:
     """
     Generic hotel website summarizer.
@@ -317,42 +232,39 @@ def scrape_hotel_website_summary(
     if not website_url.startswith(("http://", "https://")):
         website_url = f"https://{website_url}"
 
-    pages = _collect_site_content(website_url, max_pages=max_pages)
+    pages, classified_results = collect_site_content(website_url, max_pages=max_pages)
+    events_meetings = [key.upper() + "\n" + "\n".join(classified_results.get(key, [])) + "\n" for key in ["event", "meeting", "conference", "venue"]]
+    promotion_news = [key.upper() + "\n" + "\n".join(classified_results.get(key, [])) + "\n" for key in ["promotion", "news"]]
+    facility_amenity = [key.upper() + "\n" + "\n".join(classified_results.get(key, [])) + "\n" for key in ["facility", "facilities", "amenities", "amenity", "dining"]]
+    
+    events_meetings = "\n\n".join(events_meetings)
+    promotion_news = "\n\n".join(promotion_news)
+    facility_amenity = "\n\n".join(facility_amenity)
+    
+    about = "\n".join(classified_results.get("about", []))
+
     if not pages:
         return {
             "website_url": website_url,
             "status": "failed",
             "error": "Could not fetch website pages.",
-            "recent_events": [],
-            "hotel_style": {},
-            "target_customer_segments": [],
-            "high_level_summary": "",
+            "about": "",
+            "events_meetings": "",
+            "promotion_news": "",
+            "facility_amenity": "",
+            "dining": ""
         }
 
-    combined_text = "\n\n".join(pages.values())
-    events = _extract_recent_events(pages, recent_events)
-    style = _classify_hotel_style(combined_text)
-    segments = _infer_customer_segments(combined_text)
-
-    summary_parts = [
-        f"Analyzed {len(pages)} page(s).",
-        f"Hotel style is likely {style.get('label', 'unknown')}.",
-    ]
-    if events:
-        summary_parts.append(f"Found {len(events)} likely recent event mention(s).")
-    else:
-        summary_parts.append("No clear recent event mention found.")
-    if segments:
-        primary = ", ".join(seg["segment"] for seg in segments)
-        summary_parts.append(f"Likely target segments: {primary}.")
+    dedup_contents = list(set(pages.values()))
+    combined_text = "\n\n".join(dedup_contents)
 
     return {
         "full_content": combined_text,
         "website_url": website_url,
         "status": "ok",
         "pages_scanned": len(pages),
-        "recent_events": events,
-        "hotel_style": style,
-        "target_customer_segments": segments,
-        "high_level_summary": " ".join(summary_parts),
+        "about": about,
+        "events_meetings": events_meetings,
+        "promotion_news": promotion_news,
+        "facility_amenity": facility_amenity,
     }
