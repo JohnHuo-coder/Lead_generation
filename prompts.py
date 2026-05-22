@@ -67,6 +67,17 @@ Return JSON with this exact shape:
 """.strip()
 
 
+ICE_BREAKER_SYSTEM = """You write concise B2B cold emails for hospitality/outreach.
+
+Rules:
+- Open with ONE specific, accurate detail from WEBSITE CONTENT (a fact: amenity, location angle, event, positioning—whatever is actually stated there). Do not invent awards, dates, or claims not present in the text.
+- If the content is thin or generic, stay honest: refer broadly to what their site emphasizes without fabricating details.
+- Then briefly introduce why you're reaching out and state the collaboration intent clearly (use the provided intent; you may rephrase but keep the meaning).
+- Tone: professional, warm, not salesy; no flattery piles; no emojis unless the user content suggests casual brand voice.
+- Length: roughly 90-160 words for the body.
+- Do not include a fake "unsubscribe" block. Sign off simply (use sender name if provided).
+"""
+
 def build_hotel_eval_user_prompt(
     about_text: str,
     meetings_and_events_content: str,
@@ -88,4 +99,61 @@ amenities_content:
 
 location_content:
 {location_content}
+""".strip()
+
+
+
+
+def build_icebreaker_user_prompt(
+    *,
+    company_name: str,
+    recipient_name: str,
+    recipient_email: str,
+    sender_name: str,
+    collaboration_intent: str,
+    about_text: str,
+    meetings_events_text: str,
+    amenities_text: str,
+    location_text: str,
+    other_context: str = "",
+) -> str:
+    return f"""
+Company / property name: {company_name or "Unknown"}
+Recipient full name (for greeting): {recipient_name}
+Recipient email (for salutation context only): {recipient_email}
+Sender name (sign if non-empty): {sender_name}
+Collaboration intent:
+{collaboration_intent}
+WRITING PRIORITY (very important):
+1) Prefer opening with ONE concrete fact from MEETINGS & EVENTS.
+2) If meetings/events is too thin, use AMENITIES.
+3) Then ABOUT.
+4) Then LOCATION.
+5) Use OTHER CONTEXT only as fallback.
+Constraints:
+- Use only facts from provided sections.
+- No fabricated awards, dates, or claims.
+- Keep body 90-160 words.
+- Tone: professional, warm, concise.
+- End with a clear collaboration ask aligned to the intent.
+MEETINGS & EVENTS:
+---
+{meetings_events_text}
+---
+AMENITIES:
+---
+{amenities_text}
+---
+ABOUT:
+---
+{about_text}
+---
+LOCATION:
+---
+{location_text}
+---
+OTHER CONTEXT (fallback):
+---
+{other_context}
+---
 """.strip()

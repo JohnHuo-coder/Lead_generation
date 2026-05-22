@@ -34,3 +34,10 @@ class EvalResult(BaseModel):
     total_score: int = Field(ge=1, le=100)
     overall_recommendation: str
     evidence: list[EvidenceItem]
+
+
+class IcebreakerEmail(BaseModel):
+    subject: str = Field(description="Short, specific subject line")
+    body: str = Field(
+        description="Email body: one concrete fact from the site, then brief intro, then clear collaboration intent"
+    )
