@@ -5,7 +5,7 @@ from typing import Dict, List, Set, Tuple
 from urllib.parse import urljoin, urlparse
 
 import requests
-from bs4 import BeautifulSoup
+from bs4 import BeautifulSoup, NavigableString, Tag, Comment, Doctype, ProcessingInstruction, Declaration
 from collections import defaultdict
 
 USER_AGENT = (
@@ -14,7 +14,7 @@ USER_AGENT = (
     "Chrome/124.0.0.0 Safari/537.36"
 )
 
-MAX_PAGES = 12
+MAX_PAGES = 30
 REQUEST_TIMEOUT = 15
 
 EVENT_KEYWORDS = (
@@ -28,10 +28,19 @@ EVENT_KEYWORDS = (
     "festive",
     "offer",
     "promotion",
+    "news",
     "special",
     "happening",
 )
 
+AMENITY_KEYWORDS = (
+    "facility", 
+    "facilities", 
+    "amenities", 
+    "amenity", 
+    "services",
+    "dining"
+)
 
 
 
@@ -78,14 +87,138 @@ def _pick_next_links(links: Set[str]) -> List[str]:
         score = 0
         if any(keyword in lower_link for keyword in EVENT_KEYWORDS):
             score += 4
-        if any(token in lower_link for token in ("about", "stay", "rooms", "offers", "dining")):
+        if any(keyword in lower_link for keyword in AMENITY_KEYWORDS):
             score += 2
         scored.append((score, link))
     scored.sort(key=lambda item: item[0], reverse=True)
     return [link for _, link in scored]
 
+def render_table(table: Tag) -> str:
+    rows = []
+    for tr in table.find_all("tr"):
+        cells = tr.find_all(["th", "td"], recursive=False)
+        values = [c.get_text(" ", strip=True) for c in cells if c.get_text(" ", strip=True)]
+
+        if not values:
+            continue
+
+        if len(values) >= 2:
+            rows.append(f"{values[0]}: {' | '.join(values[1:])}")
+        else:
+            rows.append(values[0])
+
+    return "\n".join(rows)
 
 
+def render_list(lst: Tag) -> str:
+    items = []
+    for li in lst.find_all("li", recursive = False):
+        txt = render_inline(li)
+        if txt:
+            items.append(f"- {txt}")
+    return "\n".join(items)
+
+
+
+BLOCK_TAGS = {"p", "div", "section", "article", "h1", "h2", "h3", "h4"}
+INLINE_TAGS = {"a", "span", "strong", "b", "em", "i", "u", "small", "code"}
+LIST_TAGS = {"ul", "ol"}
+
+def norm_ws(s: str) -> str:
+    return re.sub(r"\s+", " ", s).strip()
+
+def render_inline(node: Tag, cur: str = "inline") -> str:
+    """Render one block's internal text; inline tags do not force new lines."""
+    parts: List[Tuple[str, str]] = []
+    for child in node.children:
+        if isinstance(child, (Comment, Doctype, ProcessingInstruction, Declaration)):
+            continue
+        elif isinstance(child, NavigableString):
+            text = norm_ws(str(child))
+            if text:
+                parts.append((text, "inline"))
+        elif isinstance(child, Tag):
+            name = child.name.lower()
+            if name in {"br"}:
+                parts.append(("\n", "break"))
+            elif name == "table":
+                text = render_table(child)
+                if text.strip():
+                    parts.append((text, "block"))
+            elif name in LIST_TAGS:
+                text = render_list(child)
+                if text:
+                    parts.append((text, "block"))
+            elif name in INLINE_TAGS:
+                text = render_inline(child, "inline")
+                if text:
+                    parts.append((text, "inline"))
+            elif name in BLOCK_TAGS:
+                text = render_inline(child, "block")
+                if text:
+                    parts.append((text, "block"))
+            else:
+                text = render_inline(child, "inline")
+                if text:
+                    parts.append((text, "inline"))
+
+    out_parts: List[str] = []
+    prev_kind = "block" if cur == "block" else None
+
+    for text, kind in parts:
+        if kind == "break":
+            if out_parts and not out_parts[-1].endswith("\n"):
+                out_parts.append("\n")
+            prev_kind = "break"
+            continue
+
+        if not out_parts:
+            out_parts.append(text)
+        else:
+            if prev_kind == "block" or kind == "block":
+                sep = "\n"
+            else:
+                sep = " "
+            if out_parts[-1].endswith("\n"):
+                sep = ""
+            out_parts.append(sep + text)
+        prev_kind = kind
+
+    joined = "".join(out_parts)
+    joined = re.sub(r"[ \t]+\n", "\n", joined)
+    joined = re.sub(r"\n[ \t]+", "\n", joined)
+    joined = re.sub(r"\n{3,}", "\n\n", joined)
+    joined = re.sub(r" {2,}", " ", joined)
+    return joined.strip()
+
+def smart_render(root: Tag) -> str:
+    chunks = []
+
+    for el in root.find_all(BLOCK_TAGS | LIST_TAGS | {"table"}, recursive=False):
+        name = el.name.lower()
+
+        if name in LIST_TAGS:
+            items = []
+            for li in el.find_all("li", recursive = False):
+                txt = render_inline(li)
+                if txt:
+                    items.append(f"- {txt}")
+            if items:
+                chunks.append("\n".join(items))
+
+        elif name == "table":
+            txt = render_table(el)
+            if txt:
+                chunks.append(txt)
+
+        elif name in BLOCK_TAGS:
+            txt = render_inline(el)
+            if txt: 
+                chunks.append(txt)
+    
+    out = "\n\n".join(chunks)
+    out = re.sub(r"\n{3,}", "\n\n", out).strip()
+    return out
 
 def _clean_content(soup):
     for tag in soup.select(
@@ -154,8 +287,12 @@ def _clean_content(soup):
     for tag in to_remove:
         tag.decompose()
 
-    text = soup.get_text("\n", strip=True)
-    text = normalize_keep_newlines(text)
+    root = (
+        soup.select_one("main, article, [role='main'], #content, .content, .entry-content")
+        or soup.body
+        or soup
+    )
+    text = render_inline(root)
     return text
 
 
@@ -186,7 +323,6 @@ def collect_site_content(base_url: str, max_pages: int = MAX_PAGES):
             _, soup = _fetch_page(current)
             succeeded.add(current)
         except requests.RequestException:
-            print("request failed")
             continue
         
         soup_for_text = BeautifulSoup(str(soup), "html.parser")
@@ -201,8 +337,8 @@ def collect_site_content(base_url: str, max_pages: int = MAX_PAGES):
                 if (key in current or key in link_name.lower()) and text not in seen_by_key[key]:
                     seen_by_key[key].add(text)
                     classified_results[key].append(text)
-
-        pages[current] = text[:40000]
+            pages[current] = text[:40000]
+            
         links, link_to_name = _extract_internal_links(base_url, soup)
         ranked =  _pick_next_links(links)
         for link in ranked:
