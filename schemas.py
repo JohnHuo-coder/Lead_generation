@@ -11,6 +11,14 @@ class DimensionScores(BaseModel):
     operational_feasibility: int = Field(ge=1, le=10)
 
 
+class DimensionConfidence(BaseModel):
+    venue_suitability: int = Field(ge=0, le=100)
+    brand_alignment: int = Field(ge=0, le=100)
+    wellness_synergy: int = Field(ge=0, le=100)
+    audience_fit: int = Field(ge=0, le=100)
+    operational_feasibility: int = Field(ge=0, le=100)
+
+
 class EvidenceItem(BaseModel):
     dimension: Literal[
         "venue_suitability",
@@ -31,6 +39,8 @@ class EvidenceItem(BaseModel):
 
 class EvalResult(BaseModel):
     scores: DimensionScores
+    confidence_by_dimension: DimensionConfidence
+    confidence_overall: int = Field(ge=0, le=100)
     total_score: int = Field(ge=1, le=100)
     overall_recommendation: str
     evidence: list[EvidenceItem]
