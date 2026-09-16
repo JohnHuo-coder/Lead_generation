@@ -10,10 +10,10 @@ from typing import Any, Dict, List, Optional
 from dotenv import load_dotenv
 from langchain_core.messages import HumanMessage, SystemMessage
 from langchain_openai import ChatOpenAI
-from pydantic import BaseModel, Field
 
 from Anymail_finder import find_email_decision_maker
-from web_scraper import MAX_PAGES, scrape_hotel_website_summary
+from prompts import build_icebreaker_user_prompt, ICE_BREAKER_SYSTEM
+from schemas import IcebreakerEmail
 
 load_dotenv()
 
@@ -25,24 +25,6 @@ DEFAULT_COLLABORATION_INTENT = (
 )
 
 
-class IcebreakerEmail(BaseModel):
-    subject: str = Field(description="Short, specific subject line")
-    body: str = Field(
-        description="Email body: one concrete fact from the site, then brief intro, then clear collaboration intent"
-    )
-
-
-ICE_BREAKER_SYSTEM = """You write concise B2B cold emails for hospitality/outreach.
-
-Rules:
-- Open with ONE specific, accurate detail from WEBSITE CONTENT (a fact: amenity, location angle, event, positioning—whatever is actually stated there). Do not invent awards, dates, or claims not present in the text.
-- If the content is thin or generic, stay honest: refer broadly to what their site emphasizes without fabricating details.
-- Then briefly introduce why you're reaching out and state the collaboration intent clearly (use the provided intent; you may rephrase but keep the meaning).
-- Tone: professional, warm, not salesy; no flattery piles; no emojis unless the user content suggests casual brand voice.
-- Length: roughly 90-160 words for the body.
-- Do not include a fake "unsubscribe" block. Sign off simply (use sender name if provided).
-"""
-
 
 def extract_domain(url: str) -> str:
     cleaned = re.sub(r"^https?://", "", url.strip(), flags=re.IGNORECASE)
@@ -51,38 +33,13 @@ def extract_domain(url: str) -> str:
         host = host[4:]
     return host
 
-# needs modification, more detailed context is needed
-def _format_scrape_for_prompt(summary: Dict[str, Any]) -> str:
-    """Turn scrape_hotel_website_summary output into a single string for the LLM."""
-    parts: List[str] = []
-    parts.append(f"Status: {summary.get('status', 'unknown')}")
-    parts.append(f"High-level summary: {summary.get('high_level_summary', '')}")
-
-    style = summary.get("hotel_style") or {}
-    if isinstance(style, dict) and style:
-        parts.append(f"Style signal: {style}")
-
-    segments = summary.get("target_customer_segments") or []
-    if segments:
-        parts.append(f"Audience hints: {segments}")
-
-    events = summary.get("recent_events") or []
-    if events:
-        snippets = []
-        for ev in events[:5]:
-            if isinstance(ev, dict):
-                snippets.append(
-                    f"- {ev.get('event_summary', '')[:200]} (date hint: {ev.get('date_hint', '')})"
-                )
-        if snippets:
-            parts.append("Possible event/meeting mentions:\n" + "\n".join(snippets))
-
-    return "\n\n".join(parts)[:12000]
-
 
 def generate_icebreaker_email(
     *,
-    website_context: str,
+    about_text: str,
+    meetings_events_text: str,
+    amenities_text: str,
+    location_text: str,
     recipient_email: str,
     recipient_name: str,
     company_name: str = "",
@@ -95,19 +52,18 @@ def generate_icebreaker_email(
     intent = collaboration_intent or os.getenv("OUTREACH_INTENT") or DEFAULT_COLLABORATION_INTENT
     sender = sender_name or os.getenv("SENDER_NAME") or ""
 
-    human = f"""Company / property name: {company_name or "Unknown"}
-    Recipient fulll name (for greeting at the top): {recipient_name}
-    Recipient email (for salutation context only): {recipient_email}
-    Sender name (sign the email if non-empty): {sender}
-
-    Collaboration intent (reflect in the close):
-    {intent}
-
-    WEBSITE CONTENT — facts must only come from this block:
-    ---
-    {website_context}
-    ---
-    """
+    human = build_icebreaker_user_prompt(
+        company_name = company_name,
+        recipient_name = recipient_name,
+        recipient_email = recipient_email,
+        sender_name = sender,
+        collaboration_intent = intent,
+        about_text = about_text,
+        meetings_events_text = meetings_events_text,
+        amenities_text = amenities_text,
+        location_text = location_text,
+        other_context= ""
+    ) 
 
     structured = llm.with_structured_output(IcebreakerEmail)
     out: IcebreakerEmail = structured.invoke(
@@ -118,10 +74,10 @@ def generate_icebreaker_email(
 
 def compose_email(
     leads: List[Dict[str, Any]],
+    summaries: List[Dict[str, Any]],
     *,
     collaboration_intent: Optional[str] = None,
-    sender_name: Optional[str] = None,
-    max_pages: int = MAX_PAGES,
+    sender_name: Optional[str] = None
 ) -> List[Dict[str, Any]]:
     """
     For each Apify-style lead dict (title, website, ...): scrape site, find CEO email, return icebreaker.
@@ -132,24 +88,23 @@ def compose_email(
     sender = sender_name or os.getenv("SENDER_NAME")
 
     results: List[Dict[str, Any]] = []
-    for item in leads:
+    # leads after fit scoring
+    for item, summary in zip(leads, summaries, strict=True):
         company_name = (item.get("title") or "").strip() 
-        website = (item.get("website") or "").strip()
-        if not website:
-            results.append(
-                {
-                    "title": company_name,
-                    "website": "",
-                    "error": "missing website",
-                    "subject": None,
-                    "body": None,
-                }
-            )
-            continue
 
-        summary = scrape_hotel_website_summary(website, max_pages=max_pages)
-        context = _format_scrape_for_prompt(summary)
+        # summary could be passed in after fit scoring
+        context = summary["full_content"]
 
+        about = summary["about"]
+        events_meetings = summary["events_meetings"]
+        promotion_news = summary["promotion_news"]
+        facility_amenity = summary["facility_amenity"]
+
+        events_meetings_text = "\n".join(events_meetings)
+        promotion_news_text = "\n".join(promotion_news)
+        facility_amenity_text = "\n".join(facility_amenity)
+
+        website = item["website"]
         domain = extract_domain(website)
         request_success, email_valid, error_message, finder_result = find_email_decision_maker(
             domain, ["ceo"]
@@ -188,7 +143,10 @@ def compose_email(
 
         try:
             composed = generate_icebreaker_email(
-                website_context=context,
+                about_text = about, 
+                meetings_events_text = events_meetings_text,
+                amenities_text = facility_amenity_text,
+                location_text = "", 
                 recipient_email=recipient_email,
                 recipient_name = ceo_name,
                 company_name=company_name,

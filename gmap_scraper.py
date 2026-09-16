@@ -3,6 +3,8 @@ from apify_client import ApifyClient
 import json
 from pathlib import Path
 from dotenv import load_dotenv
+from repositories.postgresProvider import upsert_initial_candidates
+from psycopg.errors import Error
 
 load_dotenv()
 
@@ -19,39 +21,29 @@ def get_companies_info(data):
     target_number = data["Number"]
     # Prepare the Actor input
     run_input = {
-        "searchStringsArray": [company_type],
+        "language": "en",
         "locationQuery": location,
         "maxCrawledPlacesPerSearch": target_number,
-        "language": "en",
-        "searchMatching": "all",
-        "placeMinimumStars": "",
-        "website": "withWebsite",
-        "skipClosedPlaces": False,
-        "scrapePlaceDetailPage": False,
-        "scrapeTableReservationProvider": False,
-        "includeWebResults": False,
-        "scrapeDirectories": False,
-        "maxQuestions": 0,
+        "maximumLeadsEnrichmentRecords": 0,
+        "placeMinimumStars": "threeAndHalf",
         "scrapeContacts": False,
+        "scrapeDirectories": False,
+        "scrapeImageAuthors": False,
+        "scrapeOrderOnline": False,
+        "scrapePlaceDetailPage": False,
+        "scrapeReviewsPersonalData": False,
         "scrapeSocialMediaProfiles": {
             "facebooks": False,
             "instagrams": False,
-            "youtubes": False,
             "tiktoks": False,
             "twitters": False,
+            "youtubes": False
         },
-        "maximumLeadsEnrichmentRecords": 0,
-        "leadsEnrichmentDepartments": [
-            "sales",
-            "marketing",
-        ],
+        "scrapeTableReservationProvider": False,
+        "searchStringsArray": [company_type],
+        "skipClosedPlaces": False,
         "verifyLeadsEnrichmentEmails": False,
-        "maxReviews": 0,
-        "reviewsStartDate": "2024-01-01",
-        "reviewsSort": "newest",
-        "reviewsFilterString": "",
-        "reviewsOrigin": "all",
-        "scrapeReviewsPersonalData": True
+        "website": "withWebsite"
     }
 
 
@@ -59,14 +51,9 @@ def get_companies_info(data):
     run = client.actor("nwua9Gu5YrADL7ZDj").call(run_input=run_input)
 
     dataset = client.dataset(run["defaultDatasetId"])
-
-    # with open("apify_results.jsonl", "w", encoding="utf-8") as f:
-    #     for item in dataset.iterate_items():
-    #         f.write(json.dumps(item, ensure_ascii=False))
-
     items = list(dataset.iterate_items())
     with open(OUTPUT_PATH, "w", encoding="utf-8") as f:
         json.dump(items, f, ensure_ascii=False, indent=2)
+    print(f"gmap scraped results saved to {OUTPUT_PATH}")
 
-    print(f"result saved to {OUTPUT_PATH}")
     return items

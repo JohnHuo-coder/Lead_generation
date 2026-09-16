@@ -1,0 +1,14 @@
+fastapi
+uvicorn
+requests
+beautifulsoup4
+python-dotenv
+pydantic
+langchain-core
+langchain-openai
+apify-client
+gspread
+oauth2client
+google-auth
+google-auth-oauthlib
+google-api-python-client

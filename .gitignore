@@ -35,3 +35,4 @@ Thumbs.db
 # Local outputs (按你项目加)
 apify_results.json
 sheet-monitor-495716-74189a665319.json
+reports/

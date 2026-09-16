@@ -19,12 +19,14 @@ def llm_score_with_evidence(
     meetings_and_events_content: str,
     amenities_content: str,
     location_content: str,
+    program_requirements_text: str = "",
 ) -> EvalResult:
     user_prompt = build_hotel_eval_user_prompt(
         about_text=about_text,
         meetings_and_events_content=meetings_and_events_content,
         amenities_content=amenities_content,
         location_content=location_content,
+        program_requirements_text=program_requirements_text,
     )
     structured_llm = llm.with_structured_output(EvalResult)
     result: EvalResult = structured_llm.invoke(

@@ -1,12 +1,10 @@
 import re
-from collections import Counter, deque
-from datetime import datetime
+from collections import defaultdict, deque
 from typing import Dict, List, Set, Tuple
 from urllib.parse import urljoin, urlparse
 
 import requests
 from bs4 import BeautifulSoup, NavigableString, Tag, Comment, Doctype, ProcessingInstruction, Declaration
-from collections import defaultdict
 
 USER_AGENT = (
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
@@ -17,32 +15,51 @@ USER_AGENT = (
 MAX_PAGES = 30
 REQUEST_TIMEOUT = 15
 
-EVENT_KEYWORDS = (
+
+ABOUT_KEYWORDS = [
+    "about", 
+    "overview", 
+    "story", 
+    "experience"
+]
+
+EVENT_KEYWORDS = [
     "event",
     "events",
-    "wedding",
     "meeting",
     "conference",
     "banquet",
     "celebration",
     "festive",
-    "offer",
     "promotion",
     "news",
-    "special",
-    "happening",
-)
+    "venue"
+]
 
-AMENITY_KEYWORDS = (
+ROOM_KEYWORDS = [
+    "accommodation", 
+    "room", 
+    "stay", 
+    "suite", 
+    "guestroom", 
+    "offer", 
+    "package"
+]
+
+AMENITY_KEYWORDS = [
     "facility", 
     "facilities", 
     "amenities", 
     "amenity", 
     "services",
     "dining"
-)
+]
 
-
+key_words = {
+    "events": EVENT_KEYWORDS,
+    "room": ROOM_KEYWORDS,
+    "amenities": AMENITY_KEYWORDS,
+}
 
 def normalize_keep_newlines(text: str) -> str:
     lines = [re.sub(r"[ \t]+", " ", line).strip() for line in text.splitlines()]
@@ -279,9 +296,10 @@ def _clean_content(soup):
         joined = " ".join(tag.get("class", [])) + " " + (tag.get("id") or "")
         low = joined.lower()
         text_len = len(tag.get_text(" ", strip=True))
+        role = (tag.get("role") or "").lower()
 
-        # keyword hit + short content => likely popup/widget noise
-        if any(k in low for k in noisy_keywords) and text_len < 800:
+        # keyword hit => likely popup/widget noise
+        if any(k in low for k in noisy_keywords) or role in {"dialog", "alertdialog"}:
             to_remove.append(tag)
 
     for tag in to_remove:
@@ -331,7 +349,8 @@ def collect_site_content(base_url: str, max_pages: int = MAX_PAGES):
         # check keyword in url
 
         if text:
-            if link_name == "home":
+            if link_name == "home" and text not in seen_by_key["about"]:
+                seen_by_key["about"].add(text)
                 classified_results["about"].append(text)
             for key in key_words:
                 if (key in current or key in link_name.lower()) and text not in seen_by_key[key]:
@@ -350,7 +369,11 @@ def collect_site_content(base_url: str, max_pages: int = MAX_PAGES):
 
     return pages, classified_results
 
-
+def _truncate_chars(text: str, max_chars: int) -> str:
+    text = (text or "").strip()
+    if len(text) <= max_chars:
+        return text
+    return text[:max_chars].rstrip() + "\n...[TRUNCATED]"
 
 
 def scrape_hotel_website_summary(
@@ -369,15 +392,26 @@ def scrape_hotel_website_summary(
         website_url = f"https://{website_url}"
 
     pages, classified_results = collect_site_content(website_url, max_pages=max_pages)
-    events_meetings = [key.upper() + "\n" + "\n".join(classified_results.get(key, [])) + "\n" for key in ["event", "meeting", "conference", "venue"]]
-    promotion_news = [key.upper() + "\n" + "\n".join(classified_results.get(key, [])) + "\n" for key in ["promotion", "news"]]
-    facility_amenity = [key.upper() + "\n" + "\n".join(classified_results.get(key, [])) + "\n" for key in ["facility", "facilities", "amenities", "amenity", "dining"]]
-    
-    events_meetings = "\n\n".join(events_meetings)
-    promotion_news = "\n\n".join(promotion_news)
-    facility_amenity = "\n\n".join(facility_amenity)
-    
-    about = "\n".join(classified_results.get("about", []))
+    events_meetings = [
+        key.upper() + "\n" + "\n".join(classified_results.get(key, [])) + "\n"
+        for key in ["event", "meeting", "conference", "venue"]
+        if classified_results.get(key)
+    ]
+    promotion_news = [
+        key.upper() + "\n" + "\n".join(classified_results.get(key, [])) + "\n"
+        for key in ["promotion", "news"]
+        if classified_results.get(key)
+    ]
+    facility_amenity = [
+        key.upper() + "\n" + "\n".join(classified_results.get(key, [])) + "\n"
+        for key in ["facility", "facilities", "amenities", "amenity", "dining"]
+        if classified_results.get(key)
+    ]
+
+    events_meetings = _truncate_chars("\n\n".join(events_meetings), 3200)
+    promotion_news = _truncate_chars("\n\n".join(promotion_news), 1800)
+    facility_amenity = _truncate_chars("\n\n".join(facility_amenity), 3200)
+    about = _truncate_chars("\n".join(classified_results.get("about", [])), 2000)
 
     if not pages:
         return {
@@ -391,11 +425,8 @@ def scrape_hotel_website_summary(
             "dining": ""
         }
 
-    dedup_contents = list(set(pages.values()))
-    combined_text = "\n\n".join(dedup_contents)
-
+    
     return {
-        "full_content": combined_text,
         "website_url": website_url,
         "status": "ok",
         "pages_scanned": len(pages),
