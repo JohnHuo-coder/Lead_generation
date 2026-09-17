@@ -16,12 +16,17 @@ class EvidenceCheckFailure(TypedDict):
     url: str
     source_excerpts: list[str]
     reason: str
-    check_stage: Literal["source_excerpt", "claim_verification"]
+    check_stage: Literal[
+        "evidence_validation",
+        "snippet_excerpt",
+        "full_page_excerpt",
+        "claim_verification",
+    ]
     failure_reason: Literal[
         "invalid_result_id",
         "excerpt_not_found",
         "missing_excerpts",
-        "context_extraction_failed",
+        "page_extract_failed",
         "claim_not_supported",
     ]
     mismatched_excerpts: list[str]
@@ -62,5 +67,15 @@ class ResearchResult(BaseModel):
     )
 
 class VerifyResult(BaseModel):
-    support: bool = Field(description="Whether the source excerpts supports the claim")
-    reason: str = Field(description="Reason behind the decision, why the source excerpt supports or not support the claim")
+    support: bool = Field(description="Whether the source excerpts support the claim.")
+    reason: str = Field(
+        description="A concise explanation citing the relevant excerpt content."
+    )
+    unclear_ownership: bool = Field(
+        default=False,
+        description=(
+            "When support=false, set to true only if the main issue is that the excerpts "
+            "mention a service or facility but do not clearly indicate whether it belongs "
+            "to the target company versus a nearby business, partner, or third party."
+        ),
+    )

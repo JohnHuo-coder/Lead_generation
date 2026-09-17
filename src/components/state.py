@@ -26,6 +26,7 @@ class ResearchState(TypedDict):
 
 
 class CheckSourceExcerptState(TypedDict):
+    company: str
     evidence: Evidence
     search_documents: Annotated[dict[str, SearchDocument], or_]
 

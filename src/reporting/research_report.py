@@ -8,6 +8,33 @@ from typing import Any
 
 from pydantic import BaseModel
 
+CHECK_STAGE_LABELS = {
+    "evidence_validation": "Evidence validation",
+    "snippet_excerpt": "Snippet excerpt check",
+    "full_page_excerpt": "Full-page excerpt check",
+    "claim_verification": "Claim verification",
+}
+
+FAILURE_REASON_LABELS = {
+    "missing_excerpts": "Missing source excerpts",
+    "invalid_result_id": "Invalid result_id",
+    "excerpt_not_found": "Excerpt not found in source",
+    "page_extract_failed": "Full-page extract failed",
+    "claim_not_supported": "Claim not supported by excerpts",
+}
+
+
+def _format_check_stage(stage: str | None) -> str:
+    if not stage:
+        return "Unknown"
+    return CHECK_STAGE_LABELS.get(stage, stage)
+
+
+def _format_failure_reason(reason: str | None) -> str:
+    if not reason:
+        return "Unknown"
+    return FAILURE_REASON_LABELS.get(reason, reason)
+
 
 def _serialize_evidence(item: Any) -> dict:
     if isinstance(item, BaseModel):
@@ -19,7 +46,31 @@ def _serialize_failure(item: Any) -> dict:
     return dict(item)
 
 
+def _resolve_source_content(
+    item: dict[str, Any],
+    search_documents: dict[str, Any],
+) -> str:
+    existing_content = item.get("source_content")
+    if existing_content:
+        return existing_content
+
+    document = search_documents.get(item.get("result_id", ""))
+    if document:
+        return document.get("content", "")
+    return ""
+
+
+def _enrich_evidence_item(
+    item: Any,
+    search_documents: dict[str, Any],
+) -> dict[str, Any]:
+    enriched = _serialize_evidence(item) if isinstance(item, BaseModel) else dict(item)
+    enriched["source_content"] = _resolve_source_content(enriched, search_documents)
+    return enriched
+
+
 def build_run_report(state: dict[str, Any]) -> dict[str, Any]:
+    search_documents = state.get("search_documents") or {}
     candidate_evidence = state.get("candidate_evidence") or []
     verified_evidence = state.get("verified_evidence") or []
     failed_evidence_checks = state.get("failed_evidence_checks") or []
@@ -49,9 +100,21 @@ def build_run_report(state: dict[str, Any]) -> dict[str, Any]:
         "verify_success_rate": (
             verified_count / evidence_total if evidence_total else None
         ),
-        "verified_evidence": [_serialize_evidence(item) for item in verified_evidence],
+        "candidate_evidence": [
+            _enrich_evidence_item(item, search_documents) for item in candidate_evidence
+        ],
+        "verified_evidence": [
+            _enrich_evidence_item(item, search_documents) for item in verified_evidence
+        ],
         "failed_evidence_checks": [
-            _serialize_failure(item) for item in failed_evidence_checks
+            {
+                **_serialize_failure(item),
+                "source_content": _resolve_source_content(
+                    _serialize_failure(item),
+                    search_documents,
+                ),
+            }
+            for item in failed_evidence_checks
         ],
         "failure_reason_counts": dict(failure_reason_counts),
         "check_stage_counts": dict(check_stage_counts),
@@ -153,8 +216,12 @@ def format_run_report(report: dict[str, Any]) -> str:
     if report["failed_evidence_checks"]:
         lines.append("Failed evidence details:")
         for index, failure in enumerate(report["failed_evidence_checks"], start=1):
-            lines.append(f"  [{index}] stage={failure.get('check_stage')}")
-            lines.append(f"      reason={failure.get('failure_reason')}")
+            lines.append(
+                f"  [{index}] stage={_format_check_stage(failure.get('check_stage'))}"
+            )
+            lines.append(
+                f"      reason={_format_failure_reason(failure.get('failure_reason'))}"
+            )
             lines.append(f"      claim={failure.get('claim')}")
             lines.append(f"      result_id={failure.get('result_id')}")
             lines.append(f"      url={failure.get('url')}")
@@ -255,6 +322,34 @@ def _render_excerpt_list(excerpts: list[str]) -> str:
     return "<ul>" + "".join(f"<li><code>{_escape(item)}</code></li>" for item in excerpts) + "</ul>"
 
 
+def _render_source_content_block(content: str, *, label: str = "Source content") -> str:
+    if not content:
+        return f"<div><strong>{_escape(label)}:</strong> <em>Not available</em></div>"
+    return (
+        f"<div><strong>{_escape(label)}:</strong>"
+        f"<pre class='source-content'>{_escape(content)}</pre></div>"
+    )
+
+
+def _render_evidence_card(
+    evidence: dict[str, Any],
+    *,
+    card_class: str,
+    extra_fields: str = "",
+) -> str:
+    return (
+        f"<div class='card {card_class}'>"
+        f"<div><strong>Claim:</strong> {_escape(evidence.get('claim'))}</div>"
+        f"<div><strong>Result ID:</strong> <code>{_escape(evidence.get('result_id'))}</code></div>"
+        f"<div><strong>URL:</strong> <a href='{_escape(evidence.get('url'))}' target='_blank' rel='noopener noreferrer'>{_escape(evidence.get('url'))}</a></div>"
+        f"<div><strong>Reason:</strong> {_escape(evidence.get('reason'))}</div>"
+        f"<div><strong>Source excerpts:</strong>{_render_excerpt_list(evidence.get('source_excerpts') or [])}</div>"
+        f"{_render_source_content_block(evidence.get('source_content') or '')}"
+        f"{extra_fields}"
+        "</div>"
+    )
+
+
 def _render_run_report_html(report: dict[str, Any]) -> str:
     sufficient = report["sufficient"]
     sufficient_class = (
@@ -264,24 +359,21 @@ def _render_run_report_html(report: dict[str, Any]) -> str:
         "Yes" if sufficient is True else "No" if sufficient is False else "Unknown"
     )
 
+    candidate_items = "".join(
+        _render_evidence_card(evidence, card_class="candidate")
+        for evidence in report.get("candidate_evidence") or []
+    ) or "<p class='muted'>No candidate evidence.</p>"
+
     verified_items = "".join(
-        (
-            "<div class='card success'>"
-            f"<div><strong>Claim:</strong> {_escape(evidence.get('claim'))}</div>"
-            f"<div><strong>Result ID:</strong> <code>{_escape(evidence.get('result_id'))}</code></div>"
-            f"<div><strong>URL:</strong> <a href='{_escape(evidence.get('url'))}' target='_blank' rel='noopener noreferrer'>{_escape(evidence.get('url'))}</a></div>"
-            f"<div><strong>Reason:</strong> {_escape(evidence.get('reason'))}</div>"
-            f"<div><strong>Source excerpts:</strong>{_render_excerpt_list(evidence.get('source_excerpts') or [])}</div>"
-            "</div>"
-        )
+        _render_evidence_card(evidence, card_class="success")
         for evidence in report["verified_evidence"]
     ) or "<p class='muted'>No verified evidence.</p>"
 
     failed_items = "".join(
         (
-            "<div class='card failure'>"
-            f"<div><strong>Stage:</strong> {_escape(failure.get('check_stage'))}</div>"
-            f"<div><strong>Failure reason:</strong> {_escape(failure.get('failure_reason'))}</div>"
+            f"<div class='card failure'>"
+            f"<div><strong>Stage:</strong> {_escape(_format_check_stage(failure.get('check_stage')))}</div>"
+            f"<div><strong>Failure reason:</strong> {_escape(_format_failure_reason(failure.get('failure_reason')))}</div>"
             f"<div><strong>Claim:</strong> {_escape(failure.get('claim'))}</div>"
             f"<div><strong>Result ID:</strong> <code>{_escape(failure.get('result_id'))}</code></div>"
             f"<div><strong>URL:</strong> <a href='{_escape(failure.get('url'))}' target='_blank' rel='noopener noreferrer'>{_escape(failure.get('url'))}</a></div>"
@@ -289,7 +381,7 @@ def _render_run_report_html(report: dict[str, Any]) -> str:
             f"<div><strong>Source excerpts:</strong>{_render_excerpt_list(failure.get('source_excerpts') or [])}</div>"
             f"<div><strong>Mismatched excerpts:</strong>{_render_excerpt_list(failure.get('mismatched_excerpts') or [])}</div>"
             f"<div><strong>Verification reason:</strong> {_escape(failure.get('verification_reason'))}</div>"
-            f"<div><strong>Source content:</strong><pre class='source-content'>{_escape(failure.get('source_content'))}</pre></div>"
+            f"{_render_source_content_block(failure.get('source_content') or '')}"
             "</div>"
         )
         for failure in report["failed_evidence_checks"]
@@ -307,6 +399,8 @@ def _render_run_report_html(report: dict[str, Any]) -> str:
     <div class="metric"><span>Failed</span><strong>{report.get('failed_count', 0)}</strong></div>
     <div class="metric"><span>Verify success rate</span><strong>{_format_rate(report.get('verify_success_rate'))}</strong></div>
   </div>
+  <h3>Candidate Evidence</h3>
+  {candidate_items}
   <h3>Verified Evidence</h3>
   {verified_items}
   <h3>Failed Evidence Checks</h3>
@@ -428,6 +522,7 @@ def render_batch_summary_html(summary: dict[str, Any], *, title: str = "Research
     }}
     .card.success {{ border-left: 4px solid var(--success); }}
     .card.failure {{ border-left: 4px solid var(--failure); }}
+    .card.candidate {{ border-left: 4px solid #2563eb; }}
     .badge-yes {{ color: var(--success); }}
     .badge-no {{ color: var(--failure); }}
     .badge-unknown {{ color: var(--unknown); }}

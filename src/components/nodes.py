@@ -1,5 +1,3 @@
-import re
-
 from langchain.agents import create_agent
 from langchain.agents.structured_output import ToolStrategy
 from langchain_core.messages import HumanMessage, SystemMessage
@@ -21,8 +19,12 @@ from prompts.system_prompts import (
     VERIFICATION_SYSTEM_PROMPT,
 )
 from llm.models import llm, structured_fit_score_llm, structured_verification_llm
+from schemas.research_schemas import VerifyResult
+from services.tavily_extract import extract_page_content
 
 MAX_SEARCH_CALLS = 4
+SEARCH_SNIPPET_CONTEXT_CHARS = 300
+FULL_PAGE_CONTEXT_CHARS = 1000
 
 
 
@@ -116,7 +118,11 @@ def continue_to_check_source_excerpts(state: ResearchState):
     return [
         Send(
             "check_source_excerpts",
-            {"evidence": evidence, "search_documents": search_documents},
+            {
+                "company": state["company"],
+                "evidence": evidence,
+                "search_documents": search_documents,
+            },
         )
         for evidence in state["candidate_evidence"]
     ]
@@ -164,43 +170,67 @@ def _build_check_failure(
     }
 
 
-def _find_excerpt_span(content: str, excerpt: str) -> tuple[int, int] | None:
-    if not excerpt:
-        return None
-
-    direct_start = content.find(excerpt)
-    if direct_start != -1:
-        return direct_start, direct_start + len(excerpt)
-
-    folded_start = content.casefold().find(excerpt.casefold())
-    if folded_start != -1:
-        return folded_start, folded_start + len(excerpt)
-
-    pattern = re.sub(r"\s+", r"\\s+", re.escape(_normalize_text(excerpt)))
-    match = re.search(pattern, content, flags=re.IGNORECASE)
-    if match:
-        return match.start(), match.end()
-
-    return None
-
-
 def _extract_context(
     content: str,
     excerpt: str,
-    context_chars: int = 300,
+    context_chars: int = SEARCH_SNIPPET_CONTEXT_CHARS,
 ) -> str | None:
-    span = _find_excerpt_span(content, excerpt)
-    if span is None:
+    normalized_content = _normalize_text(content)
+    normalized_excerpt = _normalize_text(excerpt)
+    if not normalized_excerpt:
         return None
 
-    start, end = span
+    start = normalized_content.casefold().find(normalized_excerpt.casefold())
+    if start == -1:
+        return None
+
+    end = start + len(normalized_excerpt)
     left = max(0, start - context_chars)
-    right = min(len(content), end + context_chars)
-    return content[left:right]
+    right = min(len(normalized_content), end + context_chars)
+    return normalized_content[left:right]
+
+
+def _collect_extended_excerpts(
+    source_content: str,
+    excerpts: list[str],
+    *,
+    context_chars: int,
+) -> list[str]:
+    return [
+        _extract_context(source_content, excerpt, context_chars=context_chars)
+        for excerpt in excerpts
+    ]
+
+
+def _format_extended_excerpts(extended_excerpts: list[str]) -> str:
+    return "\n\n---\n\n".join(
+        f"Excerpt {index + 1}:\n{context}"
+        for index, context in enumerate(extended_excerpts)
+    )
+
+
+def _run_claim_verification(
+    *,
+    company: str,
+    claim: str,
+    formatted_excerpts: str,
+    content_note: str = "",
+) -> VerifyResult:
+    note_block = f"\n\n{content_note}" if content_note else ""
+    return structured_verification_llm.invoke([
+        SystemMessage(content=VERIFICATION_SYSTEM_PROMPT),
+        HumanMessage(content=(
+            f"Company: {company}\n"
+            f"Claim: {claim}\n\n"
+            f"Supporting source excerpts with context:\n{formatted_excerpts}"
+            f"{note_block}"
+        )),
+    ])
 
 
 def check_source_excerpts(state: CheckSourceExcerptState) -> ResearchState:
     search_documents = state["search_documents"]
+    company = state["company"]
     evidence = state["evidence"]
     result_id = evidence.result_id
     excerpts = evidence.source_excerpts
@@ -208,7 +238,7 @@ def check_source_excerpts(state: CheckSourceExcerptState) -> ResearchState:
     if not excerpts:
         return _build_check_failure(
             evidence,
-            check_stage="source_excerpt",
+            check_stage="evidence_validation",
             failure_reason="missing_excerpts",
         )
 
@@ -216,7 +246,7 @@ def check_source_excerpts(state: CheckSourceExcerptState) -> ResearchState:
     if not document:
         return _build_check_failure(
             evidence,
-            check_stage="source_excerpt",
+            check_stage="evidence_validation",
             failure_reason="invalid_result_id",
             mismatched_excerpts=list(excerpts),
         )
@@ -230,43 +260,29 @@ def check_source_excerpts(state: CheckSourceExcerptState) -> ResearchState:
     if mismatched_excerpts:
         return _build_check_failure(
             evidence,
-            check_stage="source_excerpt",
+            check_stage="snippet_excerpt",
             failure_reason="excerpt_not_found",
             mismatched_excerpts=mismatched_excerpts,
             source_content=source_content,
         )
 
-    extended_excerpts: list[str] = []
-    context_extraction_failures: list[str] = []
-    for excerpt in excerpts:
-        context = _extract_context(source_content, excerpt)
-        if context is None:
-            context_extraction_failures.append(excerpt)
-            continue
-        extended_excerpts.append(context)
-
-    if context_extraction_failures:
-        return _build_check_failure(
-            evidence,
-            check_stage="source_excerpt",
-            failure_reason="context_extraction_failed",
-            mismatched_excerpts=context_extraction_failures,
-            source_content=source_content,
-        )
-
-    formatted_excerpts = "\n\n---\n\n".join(
-        f"Excerpt {index + 1}:\n{context}"
-        for index, context in enumerate(extended_excerpts)
+    extended_excerpts = _collect_extended_excerpts(
+        source_content,
+        excerpts,
+        context_chars=SEARCH_SNIPPET_CONTEXT_CHARS,
     )
-    verification_result = structured_verification_llm.invoke([
-        SystemMessage(content=VERIFICATION_SYSTEM_PROMPT),
-        HumanMessage(content=(
-            f"Claim: {evidence.claim}\n\n"
-            f"Supporting source excerpts with context:\n{formatted_excerpts}"
-        )),
-    ])
 
-    if not verification_result.support:
+    verification_result = _run_claim_verification(
+        company=company,
+        claim=evidence.claim,
+        formatted_excerpts=_format_extended_excerpts(extended_excerpts),
+        content_note="Source type: Tavily search snippet content.",
+    )
+
+    if verification_result.support:
+        return {"verified_evidence": [evidence]}
+
+    if not verification_result.unclear_ownership:
         return _build_check_failure(
             evidence,
             check_stage="claim_verification",
@@ -275,7 +291,58 @@ def check_source_excerpts(state: CheckSourceExcerptState) -> ResearchState:
             source_content=source_content,
         )
 
-    return {"verified_evidence": [evidence]}
+    try:
+        full_page_content = extract_page_content(evidence.url)
+    except RuntimeError as exc:
+        return _build_check_failure(
+            evidence,
+            check_stage="claim_verification",
+            failure_reason="page_extract_failed",
+            verification_reason=str(exc),
+            source_content=source_content,
+        )
+
+    full_page_mismatched_excerpts = [
+        excerpt
+        for excerpt in excerpts
+        if not _excerpt_in_content(excerpt, full_page_content)
+    ]
+    if full_page_mismatched_excerpts:
+        return _build_check_failure(
+            evidence,
+            check_stage="full_page_excerpt",
+            failure_reason="excerpt_not_found",
+            mismatched_excerpts=full_page_mismatched_excerpts,
+            verification_reason=verification_result.reason,
+            source_content=full_page_content,
+        )
+
+    full_page_extended_excerpts = _collect_extended_excerpts(
+        full_page_content,
+        excerpts,
+        context_chars=FULL_PAGE_CONTEXT_CHARS,
+    )
+
+    retry_result = _run_claim_verification(
+        company=company,
+        claim=evidence.claim,
+        formatted_excerpts=_format_extended_excerpts(full_page_extended_excerpts),
+        content_note=(
+            "Source type: full page content extracted with Tavily Extract because "
+            "ownership was unclear in the shorter search snippet."
+        ),
+    )
+
+    if retry_result.support:
+        return {"verified_evidence": [evidence]}
+
+    return _build_check_failure(
+        evidence,
+        check_stage="claim_verification",
+        failure_reason="claim_not_supported",
+        verification_reason=retry_result.reason,
+        source_content=full_page_content,
+    )
 
                 
 

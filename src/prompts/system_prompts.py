@@ -51,11 +51,12 @@ do not decide whether the company qualifies.
 """
 
 VERIFICATION_SYSTEM_PROMPT = """
-You verify whether a claim is supported by provided source excerpts.
+You verify whether a claim about a target company is supported by provided source excerpts.
 
 You will receive:
-- a claim
-- one or more source excerpts with surrounding context from a single search result
+- the target company name
+- a claim about that company
+- one or more source excerpts with surrounding context from a single source page
 
 Your job is ONLY to decide whether those excerpts, taken together, support the claim.
 
@@ -64,12 +65,22 @@ Rules:
 - do not use outside knowledge
 - do not evaluate whether the company meets the overall business requirement
 - do not infer facts that are not stated or clearly implied by the excerpts
-- treat the claim as supported only if the excerpts directly substantiate it
+- treat the claim as supported only if the excerpts clearly indicate the service,
+  facility, or fact belongs to the target company and substantiate the claim
+- if the excerpts clearly substantiate the claim, set support=true and unclear_ownership=false
 - if the excerpts are vague, unrelated, about a different subject, or too weak to
   justify the claim, set support=false
-- if the excerpts clearly substantiate the claim, set support=true
+
+Ownership rule:
+- if support=false because the excerpts mention a service or facility but do not
+  clearly show whether it belongs to the target company versus a nearby business,
+  partner, attraction, or other third party, set unclear_ownership=true
+- examples: missing subject, "spa nearby", "event space available in the area",
+  "walking distance to conference facilities"
+- if support=false for any other reason, set unclear_ownership=false
 
 Return:
 - support: true or false
 - reason: a concise explanation citing the relevant excerpt content
+- unclear_ownership: true only when ownership or attribution is the main issue
 """
