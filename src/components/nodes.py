@@ -7,19 +7,28 @@ from langchain.agents.middleware import (
     ModelResponse,
 )
 from collections.abc import Callable
+from typing import TypedDict
+
 from langgraph.types import Send
+from langsmith import traceable
 
 from components.state import ResearchState, FitScoreState, ResearchAgentState, CheckSourceExcerptState
 from schemas.research_schemas import ResearchResult
 from schemas.fit_scoring_schemas import FitScoreResult
 from components.tools import web_search
 from prompts.system_prompts import (
+    EXCERPT_DERIVATION_SYSTEM_PROMPT,
     FIT_SCORING_SYSTEM_PROMPT,
     RESEARCH_AGENT_SYSTEM_PROMPT,
     VERIFICATION_SYSTEM_PROMPT,
 )
-from llm.models import llm, structured_fit_score_llm, structured_verification_llm
-from schemas.research_schemas import VerifyResult
+from llm.models import (
+    llm,
+    structured_excerpt_derivation_llm,
+    structured_fit_score_llm,
+    structured_verification_llm,
+)
+from schemas.research_schemas import ExcerptDerivationResult, VerifyResult
 from services.tavily_extract import extract_page_content
 
 MAX_SEARCH_CALLS = 4
@@ -62,8 +71,9 @@ def control_web_search(
                 "text": (
                     "The web search budget is exhausted. "
                     "Do not request additional searches. "
-                    "Produce the final structured response using only the "
-                    "evidence already collected. If the evidence is insufficient, "
+                    "Evidence has already been extracted after each search. "
+                    "Produce the final structured response with sufficient and "
+                    "additional_evidence_needed only. If the evidence is insufficient, "
                     "set sufficient=false and describe the missing evidence."
                 ),
             },
@@ -101,16 +111,22 @@ def search_node(state: ResearchState) -> dict:
                 f"Current research focus: {focus}"
             ))],
             "tool_call_count": 0,
-            "search_documents": {}
+            "search_documents": {},
+            "company": state["company"],
+            "collaboration_intent": state["collaboration_intent"],
+            "requirement": state["requirement"],
+            "candidate_evidence": [],
         },
         config={"recursion_limit": 12},
     )
     structured_response: ResearchResult = result["structured_response"]
-    return {"candidate_evidence": structured_response.evidence, 
-            "sufficient": structured_response.sufficient, 
+    return {
+            "candidate_evidence": result.get("candidate_evidence", []),
+            "sufficient": structured_response.sufficient,
             "additional_evidence_needed": structured_response.additional_evidence_needed,
             "search_tool_call_count": result.get("tool_call_count", 0),
-            "search_documents": result.get("search_documents", {})}
+            "search_documents": result.get("search_documents", {}),
+        }
 
 
 def continue_to_check_source_excerpts(state: ResearchState):
@@ -141,6 +157,72 @@ def _excerpt_in_content(excerpt: str, content: str) -> bool:
     if not normalized_excerpt:
         return False
     return normalized_excerpt in _normalize_for_match(content)
+
+
+def _partition_excerpts(
+    content: str,
+    excerpts: list[str],
+) -> tuple[list[str], list[str]]:
+    verbatim: list[str] = []
+    non_verbatim: list[str] = []
+    for excerpt in excerpts:
+        if _excerpt_in_content(excerpt, content):
+            verbatim.append(excerpt)
+        else:
+            non_verbatim.append(excerpt)
+    return verbatim, non_verbatim
+
+
+class DerivationCheck(TypedDict):
+    excerpt: str
+    derived_from_content: bool
+    reason: str
+
+
+class ExcerptResolutionResult(TypedDict):
+    verbatim: list[str]
+    derived: list[str]
+    rejected: list[str]
+    derivation_checks: list[DerivationCheck]
+
+
+@traceable(name="check_excerpt_derivation", run_type="llm")
+def _check_excerpt_derivation(content: str, excerpt: str) -> ExcerptDerivationResult:
+    return structured_excerpt_derivation_llm.invoke([
+        SystemMessage(content=EXCERPT_DERIVATION_SYSTEM_PROMPT),
+        HumanMessage(content=(
+            f"Source content:\n{content}\n\n"
+            f"Candidate excerpt:\n{excerpt}"
+        )),
+    ])
+
+
+@traceable(name="resolve_excerpts_against_content", run_type="chain")
+def _resolve_excerpts_against_content(
+    content: str,
+    excerpts: list[str],
+) -> ExcerptResolutionResult:
+    verbatim, non_verbatim = _partition_excerpts(content, excerpts)
+    derived: list[str] = []
+    rejected: list[str] = []
+    derivation_checks: list[DerivationCheck] = []
+    for excerpt in non_verbatim:
+        result = _check_excerpt_derivation(content, excerpt)
+        derivation_checks.append({
+            "excerpt": excerpt,
+            "derived_from_content": result.derived_from_content,
+            "reason": result.reason,
+        })
+        if result.derived_from_content:
+            derived.append(excerpt)
+        else:
+            rejected.append(excerpt)
+    return {
+        "verbatim": verbatim,
+        "derived": derived,
+        "rejected": rejected,
+        "derivation_checks": derivation_checks,
+    }
 
 
 def _build_check_failure(
@@ -213,19 +295,56 @@ def _run_claim_verification(
     *,
     company: str,
     claim: str,
-    formatted_excerpts: str,
+    formatted_excerpts: str = "",
+    source_content: str = "",
     content_note: str = "",
 ) -> VerifyResult:
     note_block = f"\n\n{content_note}" if content_note else ""
+    if source_content:
+        source_block = f"Source content:\n{source_content}"
+    else:
+        source_block = f"Supporting source excerpts with context:\n{formatted_excerpts}"
     return structured_verification_llm.invoke([
         SystemMessage(content=VERIFICATION_SYSTEM_PROMPT),
         HumanMessage(content=(
             f"Company: {company}\n"
             f"Claim: {claim}\n\n"
-            f"Supporting source excerpts with context:\n{formatted_excerpts}"
+            f"{source_block}"
             f"{note_block}"
         )),
     ])
+
+
+def _resolve_verification_content(
+    *,
+    source_content: str,
+    excerpts: list[str],
+    derived_excerpts: list[str],
+    context_chars: int,
+) -> tuple[str, bool]:
+    if derived_excerpts:
+        return source_content, True
+
+    extended_excerpts = _collect_extended_excerpts(
+        source_content,
+        excerpts,
+        context_chars=context_chars,
+    )
+    return _format_extended_excerpts(extended_excerpts), False
+
+
+def _expand_content_in_page(
+    page_content: str,
+    anchor_content: str,
+    *,
+    context_chars: int,
+) -> str:
+    expanded = _extract_context(
+        page_content,
+        anchor_content,
+        context_chars=context_chars,
+    )
+    return expanded if expanded is not None else page_content
 
 
 def check_source_excerpts(state: CheckSourceExcerptState) -> ResearchState:
@@ -252,31 +371,39 @@ def check_source_excerpts(state: CheckSourceExcerptState) -> ResearchState:
         )
 
     source_content = document["content"]
-    mismatched_excerpts = [
-        excerpt
-        for excerpt in excerpts
-        if not _excerpt_in_content(excerpt, source_content)
-    ]
-    if mismatched_excerpts:
+    excerpt_resolution = _resolve_excerpts_against_content(
+        source_content,
+        excerpts,
+    )
+    derived_excerpts = excerpt_resolution["derived"]
+    rejected_excerpts = excerpt_resolution["rejected"]
+    if rejected_excerpts:
         return _build_check_failure(
             evidence,
             check_stage="snippet_excerpt",
             failure_reason="excerpt_not_found",
-            mismatched_excerpts=mismatched_excerpts,
+            mismatched_excerpts=rejected_excerpts,
             source_content=source_content,
         )
 
-    extended_excerpts = _collect_extended_excerpts(
-        source_content,
-        excerpts,
+    verification_input, use_full_content = _resolve_verification_content(
+        source_content=source_content,
+        excerpts=excerpts,
+        derived_excerpts=derived_excerpts,
         context_chars=SEARCH_SNIPPET_CONTEXT_CHARS,
     )
-
+    derived_note = (
+        " One or more excerpts were inferred rather than quoted verbatim; "
+        "the full search snippet content is provided instead."
+        if derived_excerpts
+        else ""
+    )
     verification_result = _run_claim_verification(
         company=company,
         claim=evidence.claim,
-        formatted_excerpts=_format_extended_excerpts(extended_excerpts),
-        content_note="Source type: Tavily search snippet content.",
+        formatted_excerpts=verification_input if not use_full_content else "",
+        source_content=verification_input if use_full_content else "",
+        content_note=f"Source type: Tavily search snippet content.{derived_note}",
     )
 
     if verification_result.support:
@@ -302,34 +429,21 @@ def check_source_excerpts(state: CheckSourceExcerptState) -> ResearchState:
             source_content=source_content,
         )
 
-    full_page_mismatched_excerpts = [
-        excerpt
-        for excerpt in excerpts
-        if not _excerpt_in_content(excerpt, full_page_content)
-    ]
-    if full_page_mismatched_excerpts:
-        return _build_check_failure(
-            evidence,
-            check_stage="full_page_excerpt",
-            failure_reason="excerpt_not_found",
-            mismatched_excerpts=full_page_mismatched_excerpts,
-            verification_reason=verification_result.reason,
-            source_content=full_page_content,
-        )
-
-    full_page_extended_excerpts = _collect_extended_excerpts(
+    expanded_page_content = _expand_content_in_page(
         full_page_content,
-        excerpts,
+        source_content,
         context_chars=FULL_PAGE_CONTEXT_CHARS,
     )
 
     retry_result = _run_claim_verification(
         company=company,
         claim=evidence.claim,
-        formatted_excerpts=_format_extended_excerpts(full_page_extended_excerpts),
+        source_content=expanded_page_content,
         content_note=(
             "Source type: full page content extracted with Tavily Extract because "
-            "ownership was unclear in the shorter search snippet."
+            "ownership was unclear in the shorter search snippet. "
+            "The provided text is an expanded window around the original search snippet "
+            "within the full page."
         ),
     )
 

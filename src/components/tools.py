@@ -4,6 +4,8 @@ from langchain.messages import ToolMessage
 from langgraph.types import Command
 
 from components.state import ResearchAgentState
+from services.search_evidence_extractor import extract_evidence_from_search_batch
+
 tavily_client = TavilyClient()
 
 
@@ -30,15 +32,33 @@ def web_search(query: str, runtime: ToolRuntime[ResearchAgentState]) -> dict:
         )
     result_string = "\n\n".join(tool_results)
 
-    return Command(
-        update={
-            "tool_call_count": 1,
-            "search_documents": search_documents,
-            "messages": [
-                ToolMessage(
-                    content=result_string,
-                    tool_call_id=runtime.tool_call_id,
-                )
-            ],
-        }
+    batch_evidence = extract_evidence_from_search_batch(
+        company=runtime.state.get("company", ""),
+        collaboration_intent=runtime.state.get("collaboration_intent", ""),
+        requirement=runtime.state.get("requirement", ""),
+        batch_documents=search_documents,
     )
+    if batch_evidence:
+        evidence_summary = "\n".join(
+            f"- {item.claim} (result_id={item.result_id})"
+            for item in batch_evidence
+        )
+        result_string += (
+            "\n\nEvidence extracted from this search batch:\n"
+            f"{evidence_summary}"
+        )
+
+    update: dict = {
+        "tool_call_count": 1,
+        "search_documents": search_documents,
+        "messages": [
+            ToolMessage(
+                content=result_string,
+                tool_call_id=runtime.tool_call_id,
+            )
+        ],
+    }
+    if batch_evidence:
+        update["candidate_evidence"] = batch_evidence
+
+    return Command(update=update)

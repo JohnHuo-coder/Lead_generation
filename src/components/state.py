@@ -7,6 +7,10 @@ from schemas.research_schemas import Evidence, EvidenceCheckFailure, SearchDocum
 class ResearchAgentState(AgentState):
     tool_call_count: Annotated[int, add]
     search_documents: Annotated[dict[str, SearchDocument], or_]
+    company: str
+    collaboration_intent: str
+    requirement: str
+    candidate_evidence: Annotated[list[Evidence], add]
 
 
 class ResearchState(TypedDict):

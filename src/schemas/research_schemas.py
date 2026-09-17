@@ -47,24 +47,41 @@ class Evidence(BaseModel):
         min_length=1,
         max_length=5,
         description=(
-            "1 to 5 exact short excerpts copied verbatim from the content field of the search "
-            "result identified by result_id. Each excerpt must directly support the claim. "
-            "Do not paraphrase or quote from outside that result's content."
+            "1 to 5 exact short excerpts copied character-for-character from the content field "
+            "of the search result identified by result_id. Each excerpt must directly support "
+            "the claim. Do not paraphrase, summarize, or compute values (e.g. do not derive "
+            "area from dimensions unless that exact computed value appears in the content)."
         ),
     )
     reason: str = Field(description="Why this claim is relevant to the requirement.")
 
 
-class ResearchResult(BaseModel):
+class SearchBatchEvidenceResult(BaseModel):
     evidence: list[Evidence] = Field(
-        description="Relevant evidence; empty if none was found."
+        default_factory=list,
+        description="Evidence extracted from the current search batch only.",
     )
+
+
+class ResearchResult(BaseModel):
     sufficient: bool = Field(
         description="Whether the collected evidence is enough to evaluate the requirement, not whether the company meets it."
     )
     additional_evidence_needed: list[str] = Field(
         description="Specific information still missing; empty when sufficient."
     )
+
+class ExcerptDerivationResult(BaseModel):
+    derived_from_content: bool = Field(
+        description=(
+            "True when the excerpt is a faithful restatement of content already present, "
+            "or a direct calculation from numbers explicitly stated in the content."
+        )
+    )
+    reason: str = Field(
+        description="Concise explanation citing the relevant content or what is missing."
+    )
+
 
 class VerifyResult(BaseModel):
     support: bool = Field(description="Whether the source excerpts support the claim.")

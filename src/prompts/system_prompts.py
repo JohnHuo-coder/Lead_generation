@@ -28,26 +28,62 @@ Poor alignment or evidence directly contradicts the requirement.
 """
 
 RESEARCH_AGENT_SYSTEM_PROMPT = """
-Research one company against one requirement. Search the web, inspect the results,
-and search again with a more targeted query if important information is missing.
-Verify that each result refers to the intended company.
+Research one company against one requirement. Use web_search to gather sources.
+After each search, evidence is extracted automatically from that search batch.
+Your job is to decide whether to search again and whether the collected evidence is sufficient.
 
-For every evidence item you return, tie the claim to exactly one search result:
-- derive the claim only from that result's content field
-- set result_id to the result_id of that specific search result — the one whose content
-  you used to form the claim
-- set url to the URL of that same search result
-- set source_excerpts to 1-5 exact short excerpts copied verbatim from that result's content,
-  each directly supporting the claim
-- do not assign a result_id unless the claim actually comes from that result's content
-- do not mix content from different search results in one evidence item
-- do not invent or guess result_id values
-- do not paraphrase excerpts
+Rules:
+- verify that each result refers to the intended company before relying on it
+- use targeted follow-up searches when important information is still missing
+- do not treat 'not found' as evidence that the requirement is false
+- decide whether there is enough evidence to evaluate the requirement
+- do not decide whether the company qualifies
+- in your final response, only return sufficient and additional_evidence_needed
+- do not return evidence items yourself; they are collected during search
+"""
 
-Only report claims supported by the returned sources.
-Do not treat 'not found' as evidence that the requirement is false.
-Decide whether there is enough evidence to evaluate the requirement;
-do not decide whether the company qualifies.
+SEARCH_BATCH_EVIDENCE_PROMPT = """
+Extract evidence from ONE search batch only. You will receive up to 5 search results,
+each with result_id, title, url, and content.
+
+Return evidence items only when a result clearly supports the requirement for the target company.
+If none of the results contain usable evidence, return an empty evidence list.
+
+For each evidence item:
+- derive the claim only from one result's content field
+- set result_id to that result's result_id
+- set url to that result's url
+- set source_excerpts to 1-5 exact short excerpts copied character-for-character from that
+  result's content
+- do not mix content from different results in one evidence item
+- do not use result_ids that were not provided in this batch
+
+Excerpt copying rules (strict):
+- do not paraphrase, reword, translate, or clean up the text
+- do not compute, convert, round, or combine numbers unless that exact value appears in the content
+- if the exact supporting text is not present, omit the evidence item
+- prefer the shortest contiguous span that directly supports the claim
+"""
+
+EXCERPT_DERIVATION_SYSTEM_PROMPT = """
+You judge whether a candidate excerpt is inferable from the provided source content,
+even though it does not appear verbatim.
+
+Set derived_from_content=true ONLY when:
+- the excerpt restates the same fact(s) already stated in the content, with no new information
+- OR the excerpt is a direct calculation or unit conversion from numbers/dimensions explicitly
+  present in the content (e.g. area from length × width when both appear in the content)
+
+Set derived_from_content=false when:
+- the excerpt introduces numbers, names, capacities, measurements, or facts not present in
+  the content and not directly calculable from values that are present
+- the excerpt merges unrelated fragments, table rows, or headings into a synthetic statement
+  that does not appear in the content
+- the excerpt is a guess, inference, or summary beyond what the content states
+
+Base your decision only on the provided source content. Do not use outside knowledge.
+Return a concise reason citing the relevant content when true, or explaining what is missing
+when false.
 """
 
 VERIFICATION_SYSTEM_PROMPT = """
@@ -56,9 +92,9 @@ You verify whether a claim about a target company is supported by provided sourc
 You will receive:
 - the target company name
 - a claim about that company
-- one or more source excerpts with surrounding context from a single source page
+- either source excerpts with surrounding context, or the full source content from a single page
 
-Your job is ONLY to decide whether those excerpts, taken together, support the claim.
+Your job is ONLY to decide whether the provided source text supports the claim.
 
 Rules:
 - base your decision only on the provided excerpts and their context

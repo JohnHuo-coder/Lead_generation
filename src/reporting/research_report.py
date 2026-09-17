@@ -158,6 +158,10 @@ def build_batch_summary(
     evidence_total = sum(report["evidence_total"] for report in run_reports)
     verified_total = sum(report["verified_count"] for report in run_reports)
     failed_total = sum(report["failed_count"] for report in run_reports)
+    tool_call_total = sum(report["search_tool_call_count"] for report in run_reports)
+    average_tool_call_count = (
+        tool_call_total / successful_runs if successful_runs else None
+    )
 
     failure_reason_counts: Counter[str] = Counter()
     check_stage_counts: Counter[str] = Counter()
@@ -180,6 +184,8 @@ def build_batch_summary(
         "failed_total": failed_total,
         "verify_success_rate": _rate(verified_total, evidence_total),
         "verify_failure_rate": _rate(failed_total, evidence_total),
+        "tool_call_total": tool_call_total,
+        "average_tool_call_count": average_tool_call_count,
         "failure_reason_counts": dict(failure_reason_counts),
         "failure_reason_rates": {
             reason: _rate(count, failed_total)
@@ -263,6 +269,11 @@ def format_batch_summary(summary: dict[str, Any]) -> str:
     if summary["verify_success_rate"] is not None:
         lines.append(f"Verify success rate: {summary['verify_success_rate']:.1%}")
 
+    if summary.get("average_tool_call_count") is not None:
+        lines.append(
+            f"Average tool call count: {summary['average_tool_call_count']:.1f}"
+        )
+
     if summary["failure_reason_counts"]:
         lines.append("Failure reason distribution:")
         for reason, count in summary["failure_reason_counts"].items():
@@ -295,6 +306,10 @@ def _escape(value: Any) -> str:
 
 def _format_rate(value: float | None) -> str:
     return f"{value:.1%}" if value is not None else "n/a"
+
+
+def _format_average(value: float | None) -> str:
+    return f"{value:.1f}" if value is not None else "n/a"
 
 
 def _render_distribution_rows(
@@ -565,6 +580,7 @@ def render_batch_summary_html(summary: dict[str, Any], *, title: str = "Research
       <div class="metric"><span>Verified total</span><strong>{summary.get('verified_total', 0)}</strong></div>
       <div class="metric"><span>Failed total</span><strong>{summary.get('failed_total', 0)}</strong></div>
       <div class="metric"><span>Verify success rate</span><strong>{_format_rate(summary.get('verify_success_rate'))}</strong></div>
+      <div class="metric"><span>Average tool call count</span><strong>{_format_average(summary.get('average_tool_call_count'))}</strong></div>
     </div>
 
     <h2>Failure Reason Distribution</h2>
