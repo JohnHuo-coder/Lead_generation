@@ -1,0 +1,1 @@
+MAX_SEARCH_CALLS = 4

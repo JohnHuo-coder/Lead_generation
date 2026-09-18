@@ -22,8 +22,7 @@ from llm.models import (
     llm,
     structured_fit_score_llm,
 )
-
-MAX_SEARCH_CALLS = 4
+from components.constants import MAX_SEARCH_CALLS
 
 
 @wrap_model_call

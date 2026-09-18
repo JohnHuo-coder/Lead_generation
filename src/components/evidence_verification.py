@@ -367,12 +367,26 @@ def verify_evidence_item(
     )
 
 
-def merge_verification_updates(updates: list[dict]) -> dict:
+def _evidence_key(evidence: Evidence) -> tuple[str, str]:
+    return evidence.url, _normalize_for_match(evidence.claim)
+
+
+def merge_verification_updates(
+    updates: list[dict],
+    prior_verified_evidence: list[Evidence],
+) -> dict:
     merged: dict = {}
+    seen_evidence = {
+        _evidence_key(evidence)
+        for evidence in prior_verified_evidence
+    }
     for update in updates:
         verified = update.get("verified_evidence") or []
-        if verified:
-            merged.setdefault("verified_evidence", []).extend(verified)
+        for evidence in verified:
+            key = _evidence_key(evidence)
+            if key not in seen_evidence:
+                merged.setdefault("verified_evidence", []).append(evidence)
+                seen_evidence.add(key)
 
         failures = update.get("failed_evidence_checks") or []
         if failures:

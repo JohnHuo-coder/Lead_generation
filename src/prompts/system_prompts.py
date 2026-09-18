@@ -28,7 +28,8 @@ Poor alignment or evidence directly contradicts the requirement.
 """
 
 RESEARCH_AGENT_SYSTEM_PROMPT = """
-Research one company against one requirement. Use web_search to gather sources.
+Research one company against one requirement. You have a web-search budget of four calls.
+Use web_search to gather sources.
 After each search, evidence is extracted and verified automatically from that search batch.
 Use the verification summary in each tool result to see what was verified or rejected.
 
@@ -38,6 +39,7 @@ Rules:
 - base sufficiency only on verified evidence reported in tool results
 - if a batch rejects evidence, you may search again with a more targeted query
 - use targeted follow-up searches when important information is still missing
+- each follow-up query must seek a different source or source family, not merely reword the previous query
 - do not treat 'not found' as evidence that the requirement is false
 - decide whether there is enough verified evidence to evaluate the requirement
 - do not decide whether the company qualifies
