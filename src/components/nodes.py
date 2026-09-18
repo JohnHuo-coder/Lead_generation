@@ -6,6 +6,7 @@ from langchain.agents.middleware import (
     ModelRequest,
     ModelResponse,
 )
+from langgraph.graph import END
 from collections.abc import Callable
 
 from components.state import ResearchState, FitScoreState, ResearchAgentState
@@ -107,6 +108,7 @@ def search_node(state: ResearchState) -> dict:
         "failed_evidence_checks": result.get("failed_evidence_checks", []),
         "sufficient": structured_response.sufficient,
         "additional_evidence_needed": structured_response.additional_evidence_needed,
+        "research_rounds": 1,
         "search_tool_call_count": result.get("tool_call_count", 0),
         "search_documents": result.get("search_documents", {}),
         "batch_result_id_match_failures": result.get("batch_result_id_match_failures", 0),
@@ -138,8 +140,4 @@ def fit_score_node(state: ResearchState) -> FitScoreState:
 
 def check_qualified(state: FitScoreState):
     """Determine if the company is qualified for the requirement based on the fit score."""
-    fit_score = state.get("fit_score", 0)
-    if fit_score >= 75:
-        return "contact_discovery"
-    else:
-        return "END"
+    return END

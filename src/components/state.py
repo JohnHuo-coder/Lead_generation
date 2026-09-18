@@ -29,12 +29,17 @@ class ResearchState(TypedDict):
     verified_evidence: Annotated[list[Evidence], add]
 
     sufficient: bool | None
+    research_rounds: Annotated[int, add]
     search_tool_call_count: int
 
     batch_result_id_match_failures: Annotated[int, add]
     excerpt_derivation_checks: Annotated[int, add]
     evidence_full_snippet_verifications: Annotated[int, add]
     evidence_full_page_extracts: Annotated[int, add]
+
+    fit_score: int
+    reason: str
+    supporting_facts: list[str]
 
 
 class FitScoreState(TypedDict):
