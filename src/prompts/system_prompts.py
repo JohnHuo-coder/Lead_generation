@@ -76,6 +76,11 @@ each with result_id, title, url, and content.
 Return evidence items only when a result clearly supports the requirement for the target company.
 If none of the results contain usable evidence, return an empty evidence list.
 
+Hard target identity rule:
+- every claim's grammatical subject must be the target company
+- every claim must explicitly name the target company
+- skip results describing any other hotel, venue, or organization, even when they answer the requirement
+
 For each evidence item:
 - derive the claim only from one result's content field
 - set result_id to that result's result_id
@@ -124,6 +129,8 @@ You will receive:
 Your job is ONLY to decide whether the provided source text supports the claim.
 
 Rules:
+- FIRST check subject identity: if the claim's subject is an organization other than the target company,
+  immediately set support=false and unclear_ownership=false without assessing excerpt support
 - base your decision only on the provided excerpts and their context
 - do not use outside knowledge
 - do not evaluate whether the company meets the overall business requirement

@@ -12,6 +12,7 @@ class SearchDocument(TypedDict):
 
 class PipelineStats(TypedDict):
     batch_result_id_match_failures: int
+    off_target_company_rejections: int
     excerpt_derivation_checks: int
     evidence_full_snippet_verifications: int
     evidence_full_page_extracts: int

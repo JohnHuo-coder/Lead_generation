@@ -15,8 +15,15 @@ def _format_verification_summary(
     verified_batch: list,
     failed_batch: list[dict],
     verified_so_far: list,
+    off_target_company_rejections: int,
 ) -> str:
     lines: list[str] = []
+    if off_target_company_rejections:
+        lines.append(
+            f"Rejected {off_target_company_rejections} evidence item(s) because the source "
+            "did not mention the target company; retarget searches with the property's own "
+            "domain or site: scoping."
+        )
     if verified_batch:
         lines.append("Verified from this batch:")
         lines.extend(f"- {item.claim}" for item in verified_batch)
@@ -57,7 +64,11 @@ def web_search(query: str, runtime: ToolRuntime[ResearchAgentState]) -> dict:
         **(runtime.state.get("search_documents") or {}),
         **search_documents,
     }
-    batch_evidence, result_id_match_failures = extract_evidence_from_search_batch(
+    (
+        batch_evidence,
+        result_id_match_failures,
+        off_target_company_rejections,
+    ) = extract_evidence_from_search_batch(
         company=runtime.state.get("company", ""),
         collaboration_intent=runtime.state.get("collaboration_intent", ""),
         requirement=runtime.state.get("requirement", ""),
@@ -84,6 +95,7 @@ def web_search(query: str, runtime: ToolRuntime[ResearchAgentState]) -> dict:
         verified_batch=verified_batch,
         failed_batch=failed_batch,
         verified_so_far=verified_so_far,
+        off_target_company_rejections=off_target_company_rejections,
     )
     result_string = (
         f"Search query: {query}\n"
@@ -96,6 +108,7 @@ def web_search(query: str, runtime: ToolRuntime[ResearchAgentState]) -> dict:
         "tool_call_count": 1,
         "search_documents": search_documents,
         "batch_result_id_match_failures": result_id_match_failures,
+        "off_target_company_rejections": off_target_company_rejections,
         "messages": [
             ToolMessage(
                 content=result_string,

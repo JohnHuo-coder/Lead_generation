@@ -25,6 +25,7 @@ FAILURE_REASON_LABELS = {
 
 PIPELINE_STAT_FIELDS = (
     "batch_result_id_match_failures",
+    "off_target_company_rejections",
     "excerpt_derivation_checks",
     "evidence_full_snippet_verifications",
     "evidence_full_page_extracts",
@@ -32,6 +33,7 @@ PIPELINE_STAT_FIELDS = (
 
 PIPELINE_STAT_LABELS = {
     "batch_result_id_match_failures": "Batch result_id match failures (evidence)",
+    "off_target_company_rejections": "Off-target company rejections (evidence)",
     "excerpt_derivation_checks": "Excerpt derivation LLM checks (excerpt)",
     "evidence_full_snippet_verifications": "Full snippet verifications (evidence)",
     "evidence_full_page_extracts": "Full-page extracts (evidence)",
