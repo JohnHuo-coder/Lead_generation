@@ -10,7 +10,12 @@ class ResearchAgentState(AgentState):
     company: str
     collaboration_intent: str
     requirement: str
-    candidate_evidence: Annotated[list[Evidence], add]
+    verified_evidence: Annotated[list[Evidence], add]
+    failed_evidence_checks: Annotated[list[EvidenceCheckFailure], add]
+    batch_result_id_match_failures: Annotated[int, add]
+    excerpt_derivation_checks: Annotated[int, add]
+    evidence_full_snippet_verifications: Annotated[int, add]
+    evidence_full_page_extracts: Annotated[int, add]
 
 
 class ResearchState(TypedDict):
@@ -20,19 +25,16 @@ class ResearchState(TypedDict):
     additional_evidence_needed: list[str]
     search_documents: Annotated[dict[str, SearchDocument], or_]
 
-
-    candidate_evidence: list[Evidence]
     failed_evidence_checks: Annotated[list[EvidenceCheckFailure], add]
     verified_evidence: Annotated[list[Evidence], add]
-    
+
     sufficient: bool | None
     search_tool_call_count: int
 
-
-class CheckSourceExcerptState(TypedDict):
-    company: str
-    evidence: Evidence
-    search_documents: Annotated[dict[str, SearchDocument], or_]
+    batch_result_id_match_failures: Annotated[int, add]
+    excerpt_derivation_checks: Annotated[int, add]
+    evidence_full_snippet_verifications: Annotated[int, add]
+    evidence_full_page_extracts: Annotated[int, add]
 
 
 class FitScoreState(TypedDict):

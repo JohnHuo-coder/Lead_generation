@@ -70,9 +70,9 @@ def extract_evidence_from_search_batch(
     collaboration_intent: str,
     requirement: str,
     batch_documents: dict[str, SearchDocument],
-) -> list[Evidence]:
+) -> tuple[list[Evidence], int]:
     if not batch_documents:
-        return []
+        return [], 0
 
     result = structured_search_batch_evidence_llm.invoke([
         SystemMessage(content=SEARCH_BATCH_EVIDENCE_PROMPT),
@@ -86,8 +86,11 @@ def extract_evidence_from_search_batch(
     ])
 
     resolved: list[Evidence] = []
+    result_id_match_failures = 0
     for item in result.evidence:
         matched = _resolve_evidence_to_batch(item, batch_documents)
         if matched is not None:
             resolved.append(matched)
-    return resolved
+        else:
+            result_id_match_failures += 1
+    return resolved, result_id_match_failures

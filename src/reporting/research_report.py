@@ -23,6 +23,20 @@ FAILURE_REASON_LABELS = {
     "claim_not_supported": "Claim not supported by excerpts",
 }
 
+PIPELINE_STAT_FIELDS = (
+    "batch_result_id_match_failures",
+    "excerpt_derivation_checks",
+    "evidence_full_snippet_verifications",
+    "evidence_full_page_extracts",
+)
+
+PIPELINE_STAT_LABELS = {
+    "batch_result_id_match_failures": "Batch result_id match failures (evidence)",
+    "excerpt_derivation_checks": "Excerpt derivation LLM checks (excerpt)",
+    "evidence_full_snippet_verifications": "Full snippet verifications (evidence)",
+    "evidence_full_page_extracts": "Full-page extracts (evidence)",
+}
+
 
 def _format_check_stage(stage: str | None) -> str:
     if not stage:
@@ -34,6 +48,33 @@ def _format_failure_reason(reason: str | None) -> str:
     if not reason:
         return "Unknown"
     return FAILURE_REASON_LABELS.get(reason, reason)
+
+
+def _extract_pipeline_stats(state: dict[str, Any]) -> dict[str, int]:
+    return {
+        field: int(state.get(field, 0) or 0)
+        for field in PIPELINE_STAT_FIELDS
+    }
+
+
+def _sum_pipeline_stats(reports: list[dict[str, Any]]) -> dict[str, int]:
+    totals = dict.fromkeys(PIPELINE_STAT_FIELDS, 0)
+    for report in reports:
+        for field in PIPELINE_STAT_FIELDS:
+            totals[field] += report.get("pipeline_stats", {}).get(field, 0)
+    return totals
+
+
+def _average_pipeline_stats(
+    totals: dict[str, int],
+    company_count: int,
+) -> dict[str, float | None]:
+    if company_count <= 0:
+        return dict.fromkeys(PIPELINE_STAT_FIELDS, None)
+    return {
+        field: totals.get(field, 0) / company_count
+        for field in PIPELINE_STAT_FIELDS
+    }
 
 
 def _serialize_evidence(item: Any) -> dict:
@@ -71,7 +112,6 @@ def _enrich_evidence_item(
 
 def build_run_report(state: dict[str, Any]) -> dict[str, Any]:
     search_documents = state.get("search_documents") or {}
-    candidate_evidence = state.get("candidate_evidence") or []
     verified_evidence = state.get("verified_evidence") or []
     failed_evidence_checks = state.get("failed_evidence_checks") or []
 
@@ -84,7 +124,7 @@ def build_run_report(state: dict[str, Any]) -> dict[str, Any]:
         for failure in failed_evidence_checks
     )
 
-    evidence_total = len(candidate_evidence)
+    evidence_total = len(verified_evidence) + len(failed_evidence_checks)
     verified_count = len(verified_evidence)
     failed_count = len(failed_evidence_checks)
 
@@ -100,9 +140,6 @@ def build_run_report(state: dict[str, Any]) -> dict[str, Any]:
         "verify_success_rate": (
             verified_count / evidence_total if evidence_total else None
         ),
-        "candidate_evidence": [
-            _enrich_evidence_item(item, search_documents) for item in candidate_evidence
-        ],
         "verified_evidence": [
             _enrich_evidence_item(item, search_documents) for item in verified_evidence
         ],
@@ -118,6 +155,7 @@ def build_run_report(state: dict[str, Any]) -> dict[str, Any]:
         ],
         "failure_reason_counts": dict(failure_reason_counts),
         "check_stage_counts": dict(check_stage_counts),
+        "pipeline_stats": _extract_pipeline_stats(state),
     }
 
 
@@ -172,6 +210,12 @@ def build_batch_summary(
     def _rate(numerator: int, denominator: int) -> float | None:
         return numerator / denominator if denominator else None
 
+    pipeline_stats = _sum_pipeline_stats(run_reports)
+    pipeline_stats_averages = _average_pipeline_stats(
+        pipeline_stats,
+        successful_runs,
+    )
+
     return {
         "total_runs": total_runs,
         "successful_runs": successful_runs,
@@ -186,6 +230,8 @@ def build_batch_summary(
         "verify_failure_rate": _rate(failed_total, evidence_total),
         "tool_call_total": tool_call_total,
         "average_tool_call_count": average_tool_call_count,
+        "pipeline_stats": pipeline_stats,
+        "pipeline_stats_averages": pipeline_stats_averages,
         "failure_reason_counts": dict(failure_reason_counts),
         "failure_reason_rates": {
             reason: _rate(count, failed_total)
@@ -213,6 +259,8 @@ def format_run_report(report: dict[str, Any]) -> str:
 
     if report["verify_success_rate"] is not None:
         lines.append(f"Verify success rate: {report['verify_success_rate']:.1%}")
+
+    lines.extend(_format_additional_evidence_needed(report))
 
     if report["failure_reason_counts"]:
         lines.append("Failure breakdown:")
@@ -274,6 +322,21 @@ def format_batch_summary(summary: dict[str, Any]) -> str:
             f"Average tool call count: {summary['average_tool_call_count']:.1f}"
         )
 
+    pipeline_stats = summary.get("pipeline_stats") or {}
+    pipeline_stats_averages = summary.get("pipeline_stats_averages") or {}
+    if any(pipeline_stats.values()) or any(
+        value is not None for value in pipeline_stats_averages.values()
+    ):
+        lines.append("Pipeline stats (totals):")
+        for field in PIPELINE_STAT_FIELDS:
+            count = pipeline_stats.get(field, 0)
+            lines.append(f"  - {PIPELINE_STAT_LABELS[field]}: {count}")
+        lines.append("Pipeline stats (avg per company):")
+        for field in PIPELINE_STAT_FIELDS:
+            average = pipeline_stats_averages.get(field)
+            avg_text = f"{average:.2f}" if average is not None else "n/a"
+            lines.append(f"  - {PIPELINE_STAT_LABELS[field]}: {avg_text}")
+
     if summary["failure_reason_counts"]:
         lines.append("Failure reason distribution:")
         for reason, count in summary["failure_reason_counts"].items():
@@ -308,8 +371,8 @@ def _format_rate(value: float | None) -> str:
     return f"{value:.1%}" if value is not None else "n/a"
 
 
-def _format_average(value: float | None) -> str:
-    return f"{value:.1f}" if value is not None else "n/a"
+def _format_average(value: float | None, *, digits: int = 1) -> str:
+    return f"{value:.{digits}f}" if value is not None else "n/a"
 
 
 def _render_distribution_rows(
@@ -335,6 +398,29 @@ def _render_excerpt_list(excerpts: list[str]) -> str:
     if not excerpts:
         return "<em>None</em>"
     return "<ul>" + "".join(f"<li><code>{_escape(item)}</code></li>" for item in excerpts) + "</ul>"
+
+
+def _render_additional_evidence_block(items: list[str]) -> str:
+    if not items:
+        return "<p class='muted'>No additional evidence specified.</p>"
+    return (
+        "<ul>"
+        + "".join(f"<li>{_escape(item)}</li>" for item in items)
+        + "</ul>"
+    )
+
+
+def _format_additional_evidence_needed(report: dict[str, Any]) -> list[str]:
+    if report.get("sufficient") is not False:
+        return []
+
+    lines = ["Additional evidence needed:"]
+    items = report.get("additional_evidence_needed") or []
+    if items:
+        lines.extend(f"  - {item}" for item in items)
+    else:
+        lines.append("  - (none specified)")
+    return lines
 
 
 def _render_source_content_block(content: str, *, label: str = "Source content") -> str:
@@ -374,11 +460,6 @@ def _render_run_report_html(report: dict[str, Any]) -> str:
         "Yes" if sufficient is True else "No" if sufficient is False else "Unknown"
     )
 
-    candidate_items = "".join(
-        _render_evidence_card(evidence, card_class="candidate")
-        for evidence in report.get("candidate_evidence") or []
-    ) or "<p class='muted'>No candidate evidence.</p>"
-
     verified_items = "".join(
         _render_evidence_card(evidence, card_class="success")
         for evidence in report["verified_evidence"]
@@ -402,6 +483,25 @@ def _render_run_report_html(report: dict[str, Any]) -> str:
         for failure in report["failed_evidence_checks"]
     ) or "<p class='muted'>No failed evidence checks.</p>"
 
+    pipeline_stats = report.get("pipeline_stats") or {}
+    pipeline_metrics = "".join(
+        (
+            f"<div class='metric'>"
+            f"<span>{_escape(PIPELINE_STAT_LABELS[field])}</span>"
+            f"<strong>{pipeline_stats.get(field, 0)}</strong>"
+            "</div>"
+        )
+        for field in PIPELINE_STAT_FIELDS
+        if pipeline_stats.get(field, 0)
+    )
+
+    additional_evidence_section = ""
+    if sufficient is False:
+        additional_evidence_section = (
+            "<h3>Additional Evidence Needed</h3>"
+            f"{_render_additional_evidence_block(report.get('additional_evidence_needed') or [])}"
+        )
+
     return f"""
 <section class="run-report">
   <h2>{_escape(report.get('company'))}</h2>
@@ -413,9 +513,9 @@ def _render_run_report_html(report: dict[str, Any]) -> str:
     <div class="metric"><span>Verified</span><strong>{report.get('verified_count', 0)}</strong></div>
     <div class="metric"><span>Failed</span><strong>{report.get('failed_count', 0)}</strong></div>
     <div class="metric"><span>Verify success rate</span><strong>{_format_rate(report.get('verify_success_rate'))}</strong></div>
+    {pipeline_metrics}
   </div>
-  <h3>Candidate Evidence</h3>
-  {candidate_items}
+  {additional_evidence_section}
   <h3>Verified Evidence</h3>
   {verified_items}
   <h3>Failed Evidence Checks</h3>
@@ -581,6 +681,16 @@ def render_batch_summary_html(summary: dict[str, Any], *, title: str = "Research
       <div class="metric"><span>Failed total</span><strong>{summary.get('failed_total', 0)}</strong></div>
       <div class="metric"><span>Verify success rate</span><strong>{_format_rate(summary.get('verify_success_rate'))}</strong></div>
       <div class="metric"><span>Average tool call count</span><strong>{_format_average(summary.get('average_tool_call_count'))}</strong></div>
+      {''.join(
+          f"<div class='metric'><span>{_escape(PIPELINE_STAT_LABELS[field])}</span>"
+          f"<strong>{summary.get('pipeline_stats', {}).get(field, 0)}</strong></div>"
+          for field in PIPELINE_STAT_FIELDS
+      )}
+      {''.join(
+          f"<div class='metric'><span>{_escape(PIPELINE_STAT_LABELS[field])} (avg/company)</span>"
+          f"<strong>{_format_average(summary.get('pipeline_stats_averages', {}).get(field), digits=2)}</strong></div>"
+          for field in PIPELINE_STAT_FIELDS
+      )}
     </div>
 
     <h2>Failure Reason Distribution</h2>

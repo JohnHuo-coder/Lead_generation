@@ -10,6 +10,13 @@ class SearchDocument(TypedDict):
     content: str
 
 
+class PipelineStats(TypedDict):
+    batch_result_id_match_failures: int
+    excerpt_derivation_checks: int
+    evidence_full_snippet_verifications: int
+    evidence_full_page_extracts: int
+
+
 class EvidenceCheckFailure(TypedDict):
     claim: str
     result_id: str
@@ -65,10 +72,17 @@ class SearchBatchEvidenceResult(BaseModel):
 
 class ResearchResult(BaseModel):
     sufficient: bool = Field(
-        description="Whether the collected evidence is enough to evaluate the requirement, not whether the company meets it."
+        description=(
+            "Whether the collected evidence is enough to evaluate the requirement, "
+            "not whether the company meets it. This is the final research decision "
+            "after search is complete."
+        )
     )
     additional_evidence_needed: list[str] = Field(
-        description="Specific information still missing; empty when sufficient."
+        description=(
+            "Specific information still missing from the collected evidence; "
+            "return an empty list when sufficient=true. Do not put search queries here."
+        )
     )
 
 class ExcerptDerivationResult(BaseModel):

@@ -29,18 +29,45 @@ Poor alignment or evidence directly contradicts the requirement.
 
 RESEARCH_AGENT_SYSTEM_PROMPT = """
 Research one company against one requirement. Use web_search to gather sources.
-After each search, evidence is extracted automatically from that search batch.
-Your job is to decide whether to search again and whether the collected evidence is sufficient.
+After each search, evidence is extracted and verified automatically from that search batch.
+Use the verification summary in each tool result to see what was verified or rejected.
+
+Your job is to decide whether to search again and whether the verified evidence is sufficient.
 
 Rules:
-- verify that each result refers to the intended company before relying on it
+- base sufficiency only on verified evidence reported in tool results
+- if a batch rejects evidence, you may search again with a more targeted query
 - use targeted follow-up searches when important information is still missing
 - do not treat 'not found' as evidence that the requirement is false
-- decide whether there is enough evidence to evaluate the requirement
+- decide whether there is enough verified evidence to evaluate the requirement
 - do not decide whether the company qualifies
 - in your final response, only return sufficient and additional_evidence_needed
-- do not return evidence items yourself; they are collected during search
+- do not return evidence items yourself; verified evidence is collected during search
 """
+
+RESEARCH_FINAL_SYSTEM_PROMPT = """
+The web search budget is exhausted. You cannot search again.
+
+Your only task now is to call the ResearchResult tool once with exactly these fields:
+- sufficient: boolean
+- additional_evidence_needed: list of strings
+
+Rules:
+- do NOT pass query or any other field
+- do NOT call web_search
+- do NOT return evidence items; they were already collected during search
+- base your decision only on verified evidence already reported in tool results
+- if important information is still missing, set sufficient=false and list what is missing
+  in additional_evidence_needed
+- if the collected evidence is enough to evaluate the requirement, set sufficient=true and
+  return an empty additional_evidence_needed list
+- do not decide whether the company qualifies
+"""
+
+RESEARCH_FINAL_HUMAN_REMINDER = (
+    "Search budget is exhausted. Call the ResearchResult tool now with only "
+    "`sufficient` and `additional_evidence_needed`. Do not pass `query`."
+)
 
 SEARCH_BATCH_EVIDENCE_PROMPT = """
 Extract evidence from ONE search batch only. You will receive up to 5 search results,
