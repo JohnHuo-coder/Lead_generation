@@ -1,3 +1,5 @@
+import re
+
 from langchain.tools import tool, ToolRuntime
 from tavily import TavilyClient
 from langchain.messages import ToolMessage
@@ -35,9 +37,24 @@ def _format_verification_summary(
 
 
 @tool
-def web_search(query: str, runtime: ToolRuntime[ResearchAgentState]) -> dict:
-    """Search the web for pages about a company and return source URLs and excerpts."""
-    response = tavily_client.search(query, max_results=5)
+def web_search(
+    query: str,
+    runtime: ToolRuntime[ResearchAgentState],
+    include_domains: list[str] | None = None,
+) -> dict:
+    """Search the web; use include_domains for domain restrictions, not search operators."""
+    site_domains = re.findall(r"(?<!\S)site:([^\s]+)", query)
+    query = re.sub(r"(?<!\S)site:[^\s]+", "", query)
+    query = " ".join(query.split())
+    domains = list(dict.fromkeys([*(include_domains or []), *site_domains]))
+    if domains:
+        response = tavily_client.search(
+            query,
+            max_results=5,
+            include_domains=domains,
+        )
+    else:
+        response = tavily_client.search(query, max_results=5)
     search_documents = {}
     result_index_lines = []
     for index, item in enumerate(response["results"]):

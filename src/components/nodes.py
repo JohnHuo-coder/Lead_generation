@@ -83,6 +83,7 @@ def search_node(state: ResearchState) -> dict:
         {"messages": [
             HumanMessage(content=(
                 f"Company: {state['company']}\n"
+                f"Location: {state.get('location') or 'unknown - establish it with your first search'}\n"
                 f"Collaboration intent: {state['collaboration_intent']}\n"
                 f"Requirement: {state['requirement']}\n"
                 f"Current research focus: {focus}"
@@ -90,6 +91,7 @@ def search_node(state: ResearchState) -> dict:
             "tool_call_count": 0,
             "search_documents": {},
             "company": state["company"],
+            "location": state.get("location", ""),
             "collaboration_intent": state["collaboration_intent"],
             "requirement": state["requirement"],
             "verified_evidence": [],

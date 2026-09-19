@@ -8,6 +8,7 @@ class ResearchAgentState(AgentState):
     tool_call_count: Annotated[int, add]
     search_documents: Annotated[dict[str, SearchDocument], or_]
     company: str
+    location: str
     collaboration_intent: str
     requirement: str
     verified_evidence: Annotated[list[Evidence], add]
@@ -20,6 +21,7 @@ class ResearchAgentState(AgentState):
 
 class ResearchState(TypedDict):
     company: str
+    location: str
     collaboration_intent: str
     requirement: str
     additional_evidence_needed: list[str]

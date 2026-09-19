@@ -34,6 +34,12 @@ Use the verification summary in each tool result to see what was verified or rej
 
 Your job is to decide whether to search again and whether the verified evidence is sufficient.
 
+Query rules:
+- once the property's location is known, every web_search query MUST include the property's full name, city, and country
+- if the city is unknown, the first search may be a short locating query using the property's full name plus "hotel address", and every later query MUST use the confirmed city and country
+- never use search-engine operators such as site:, inurl:, or filetype: because the search tool passes them through as literal text
+- to restrict a search to one domain, use the tool's include_domains argument instead
+
 Rules:
 - base sufficiency only on verified evidence reported in tool results
 - if a batch rejects evidence, you may search again with a more targeted query
