@@ -89,6 +89,7 @@ def _resolve_evidence_to_batch(
     if evidence.result_id in batch_documents and _matches_document(evidence.result_id):
         return _resolve(evidence.result_id)
 
+    # llm usually gives wrong result id, use excerpt in content test to find the right document and its result_id
     matching_ids = [
         result_id
         for result_id in batch_documents

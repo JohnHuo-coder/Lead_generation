@@ -353,6 +353,15 @@ def format_batch_summary(summary: dict[str, Any]) -> str:
             rate_text = f"{rate:.1%}" if rate is not None else "n/a"
             lines.append(f"  - {stage}: {count} ({rate_text})")
 
+    insufficient_runs = [
+        report for report in summary.get("runs", []) if report.get("sufficient") is False
+    ]
+    if insufficient_runs:
+        lines.append("Insufficient runs:")
+        for report in insufficient_runs:
+            lines.append(f"  - {report.get('company')}")
+            lines.extend(_format_additional_evidence_needed(report))
+
     if summary["errors"]:
         lines.append("Errors:")
         for error in summary["errors"]:
@@ -410,6 +419,33 @@ def _render_additional_evidence_block(items: list[str]) -> str:
         + "".join(f"<li>{_escape(item)}</li>" for item in items)
         + "</ul>"
     )
+
+
+def _render_insufficient_runs_table(reports: list[dict[str, Any]]) -> str:
+    insufficient_runs = [
+        report
+        for report in reports
+        if report.get("sufficient") is False
+    ]
+    if not insufficient_runs:
+        return ""
+
+    rows = "".join(
+        (
+            "<tr>"
+            f"<td>{_escape(report.get('company'))}</td>"
+            f"<td>{_render_additional_evidence_block(report.get('additional_evidence_needed') or [])}</td>"
+            "</tr>"
+        )
+        for report in insufficient_runs
+    )
+    return f"""
+<h2>Insufficient Runs</h2>
+<table>
+  <thead><tr><th>Company</th><th>Additional Evidence Needed</th></tr></thead>
+  <tbody>{rows}</tbody>
+</table>
+"""
 
 
 def _format_additional_evidence_needed(report: dict[str, Any]) -> list[str]:
@@ -500,8 +536,10 @@ def _render_run_report_html(report: dict[str, Any]) -> str:
     additional_evidence_section = ""
     if sufficient is False:
         additional_evidence_section = (
+            "<div class='insufficient-callout'>"
             "<h3>Additional Evidence Needed</h3>"
             f"{_render_additional_evidence_block(report.get('additional_evidence_needed') or [])}"
+            "</div>"
         )
 
     return f"""
@@ -643,6 +681,18 @@ def render_batch_summary_html(summary: dict[str, Any], *, title: str = "Research
     .badge-yes {{ color: var(--success); }}
     .badge-no {{ color: var(--failure); }}
     .badge-unknown {{ color: var(--unknown); }}
+    .insufficient-callout {{
+      margin: 16px 0 20px;
+      padding: 14px 16px;
+      background: #fff7ed;
+      border: 1px solid #fdba74;
+      border-left: 4px solid var(--failure);
+      border-radius: 12px;
+    }}
+    .insufficient-callout h3 {{
+      margin-top: 0;
+      color: var(--failure);
+    }}
     code {{
       background: #f3f4f6;
       padding: 2px 4px;
@@ -712,6 +762,8 @@ def render_batch_summary_html(summary: dict[str, Any], *, title: str = "Research
     </table>
 
     {error_section}
+
+    {_render_insufficient_runs_table(summary.get('runs', []))}
 
     <h2>Run Details</h2>
     {run_sections}

@@ -69,7 +69,7 @@ def _check_excerpt_derivation(content: str, excerpt: str) -> ExcerptDerivationRe
         )),
     ])
 
-
+# check which excerpts are exactly copied from content, which are reworte by llm
 @traceable(name="resolve_excerpts_against_content", run_type="chain")
 def _resolve_excerpts_against_content(
     content: str,
@@ -284,7 +284,8 @@ def verify_evidence_item(
             source_content=source_content,
             pipeline_stats=pipeline_stats,
         )
-
+    # decide to use full content or combined source excerpts string to check claim
+    # if a excerpt is rewrote, use full content
     verification_input, use_full_content = _resolve_verification_content(
         source_content=source_content,
         excerpts=excerpts,
