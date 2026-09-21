@@ -11,6 +11,7 @@ from collections.abc import Callable
 from components.state import ResearchState, FitScoreState, ResearchAgentState
 from schemas.research_schemas import ResearchResult
 from schemas.fit_scoring_schemas import FitScoreResult
+from components.constants import MAX_SEARCH_CALLS
 from components.tools import web_search
 from prompts.system_prompts import (
     FIT_SCORING_SYSTEM_PROMPT,
@@ -22,8 +23,6 @@ from llm.models import (
     llm,
     structured_fit_score_llm,
 )
-
-MAX_SEARCH_CALLS = 4
 
 
 @wrap_model_call
@@ -72,7 +71,9 @@ research_agent = create_agent(
     middleware=[control_web_search],
     response_format=ToolStrategy(ResearchResult),
     state_schema=ResearchAgentState,
-    system_prompt=RESEARCH_AGENT_SYSTEM_PROMPT,
+    system_prompt=RESEARCH_AGENT_SYSTEM_PROMPT.format(
+        max_search_calls=MAX_SEARCH_CALLS,
+    ),
 )
 
 
@@ -96,6 +97,11 @@ def search_node(state: ResearchState) -> dict:
             "failed_evidence_checks": [],
             "batch_result_id_match_failures": 0,
             "off_target_company_rejections": 0,
+            "duplicate_search_result_skips": 0,
+            "duplicate_claim_skips": 0,
+            "empty_evidence_tool_calls": 0,
+            "fallback_extract_attempts": 0,
+            "fallback_verified_hits": 0,
             "excerpt_derivation_checks": 0,
             "evidence_full_snippet_verifications": 0,
             "evidence_full_page_extracts": 0,
@@ -108,10 +114,16 @@ def search_node(state: ResearchState) -> dict:
         "failed_evidence_checks": result.get("failed_evidence_checks", []),
         "sufficient": structured_response.sufficient,
         "additional_evidence_needed": structured_response.additional_evidence_needed,
+        "sufficient_reason": structured_response.reason,
         "search_tool_call_count": result.get("tool_call_count", 0),
         "search_documents": result.get("search_documents", {}),
         "batch_result_id_match_failures": result.get("batch_result_id_match_failures", 0),
         "off_target_company_rejections": result.get("off_target_company_rejections", 0),
+        "duplicate_search_result_skips": result.get("duplicate_search_result_skips", 0),
+        "duplicate_claim_skips": result.get("duplicate_claim_skips", 0),
+        "empty_evidence_tool_calls": result.get("empty_evidence_tool_calls", 0),
+        "fallback_extract_attempts": result.get("fallback_extract_attempts", 0),
+        "fallback_verified_hits": result.get("fallback_verified_hits", 0),
         "excerpt_derivation_checks": result.get("excerpt_derivation_checks", 0),
         "evidence_full_snippet_verifications": result.get("evidence_full_snippet_verifications", 0),
         "evidence_full_page_extracts": result.get("evidence_full_page_extracts", 0),

@@ -28,20 +28,42 @@ Poor alignment or evidence directly contradicts the requirement.
 """
 
 RESEARCH_AGENT_SYSTEM_PROMPT = """
-Research one company against one requirement. Use web_search to gather sources.
-After each search, evidence is extracted and verified automatically from that search batch.
-Use the verification summary in each tool result to see what was verified or rejected.
+Research one company against one requirement. You have a web search budget of {max_search_calls} calls.
+Call web_search with two arguments on every search:
+- query: keyword query for the search engine
+- search_focus: one sentence describing the exact evidence gap this search should fill
 
-Your job is to decide whether to search again and whether the verified evidence is sufficient.
+Evidence extraction uses search_focus (not query) to decide which facts to pull from results.
+After each search, evidence is extracted and verified automatically from that search batch.
+Each tool result reports searches used and any new verified claims from that search.
+
+After every web_search, follow this process in order:
+1. Combine the new verified claims with all verified claims from earlier searches.
+2. Decide whether that combined evidence is already enough to evaluate the requirement.
+3. If yes, stop searching immediately and return your final answer.
+4. If not, decide the most important missing search focus next.
+5. Call web_search again with that search_focus and a query aimed at that focus.
+
+Do not jump straight to a new query without steps 1-4.
+Example progression:
+- search_focus: whether the property has private meeting or event space
+  query: "<company name> meeting room event space"
+- no verified claims yet: keep the same search_focus, change query angle
+  query: "site:<official-domain> meeting room" or "<company name> ballroom conference"
+- after meeting-space existence is verified, next search_focus: capacity or size of the space
+  query: "<company name> meeting room capacity"
 
 Rules:
-- base sufficiency only on verified evidence reported in tool results
-- if a batch rejects evidence, you may search again with a more targeted query
-- use targeted follow-up searches when important information is still missing
+- change search_focus only after the current focus is satisfied by verified claims, or a different gap becomes the priority
+- if a search adds no verified claims, the focus is not satisfied; you may retry the same search_focus with a different query
+- query is for retrieval only; search_focus drives what evidence is extracted
+- base sufficiency only on verified claims reported across tool results
+- stop as soon as combined verified claims are enough to evaluate the requirement
 - do not treat 'not found' as evidence that the requirement is false
-- decide whether there is enough verified evidence to evaluate the requirement
 - do not decide whether the company qualifies
-- in your final response, only return sufficient and additional_evidence_needed
+- in your final response, return sufficient, additional_evidence_needed, and reason
+- when sufficient=true, reason must briefly explain which verified claims cover the
+  requirement and why that is enough to evaluate it; when sufficient=false, reason=""
 - do not return evidence items yourself; verified evidence is collected during search
 """
 
@@ -51,35 +73,67 @@ The web search budget is exhausted. You cannot search again.
 Your only task now is to call the ResearchResult tool once with exactly these fields:
 - sufficient: boolean
 - additional_evidence_needed: list of strings
+- reason: string
 
 Rules:
 - do NOT pass query or any other field
 - do NOT call web_search
 - do NOT return evidence items; they were already collected during search
 - base your decision only on verified evidence already reported in tool results
-- if important information is still missing, set sufficient=false and list what is missing
-  in additional_evidence_needed
-- if the collected evidence is enough to evaluate the requirement, set sufficient=true and
-  return an empty additional_evidence_needed list
+- if important information is still missing, set sufficient=false, list what is missing
+  in additional_evidence_needed, and set reason=""
+- if the collected evidence is enough to evaluate the requirement, set sufficient=true,
+  return an empty additional_evidence_needed list, and explain in reason which verified
+  claims cover the requirement and why that is enough to evaluate it
 - do not decide whether the company qualifies
 """
 
 RESEARCH_FINAL_HUMAN_REMINDER = (
-    "Search budget is exhausted. Call the ResearchResult tool now with only "
-    "`sufficient` and `additional_evidence_needed`. Do not pass `query`."
+    "Search budget is exhausted. Call the ResearchResult tool now with "
+    "`sufficient`, `additional_evidence_needed`, and `reason`. Do not pass `query`."
 )
 
 SEARCH_BATCH_EVIDENCE_PROMPT = """
 Extract evidence from ONE search batch only. You will receive up to 5 search results,
-each with result_id, title, url, and content.
+each with result_id, title, url, and content, plus:
+- search_focus: the evidence gap this batch should fill (PRIMARY guide for extraction)
+- search query: keyword query used for retrieval only (secondary)
 
-Return evidence items only when a result clearly supports the requirement for the target company.
-If none of the results contain usable evidence, return an empty evidence list.
+You will also receive already verified claims from earlier searches. Do NOT re-extract them
+or weaker versions of them (e.g. do not extract "has a conference room" again if that is already verified).
+
+Extract ONLY claims that directly answer THIS batch's search_focus — nothing else.
+Match the type of fact to the focus:
+- focus on existence / availability → extract only whether a qualifying space or service exists
+- focus on capacity / headcount / size → extract ONLY claims with explicit numbers or measurable
+  size (guests, seats, pax, sqm, sq ft, room size); never extract existence-only lines
+- focus on catering / banquet → extract only catering or banquet service facts
+
+When search_focus asks for capacity (e.g. 20-60 attendees, max capacity, room size):
+- YES: "Conference room holds up to 50 guests"
+- NO: "has a conference room"
+- NO: "provides meeting/banquet facilities"
+- NO: "offers event spaces ideal for conferences" with no capacity figure
+
+When search_focus asks for existence, do not extract capacity figures unless they also prove existence.
+
+Include claims that support or contradict the search_focus.
+If the batch has no facts that answer the search_focus, return an empty evidence list.
+Ignore retrieval keywords in the search query when they differ from search_focus.
+Do NOT extract generic marketing copy, amenity lists, or AV/catering/setup blurbs unless they
+contain the specific fact requested by search_focus.
 
 Hard target identity rule:
 - every claim's grammatical subject must be the target company
 - every claim must explicitly name the target company
 - skip results describing any other hotel, venue, or organization, even when they answer the requirement
+
+Claim rules (strict):
+- state only what the source actually says; do not argue whether the requirement is met
+- do not rewrite numbers, ranges, capacities, or sizes to match the requirement wording
+  (e.g. if the source says 25-95 guests, the claim must say 25-95, not 20-60)
+- do not infer, round, combine, or substitute values that are not explicitly in the content
+- if a fact is vague or absent, omit the evidence item rather than tailoring the claim
 
 For each evidence item:
 - derive the claim only from one result's content field
@@ -93,8 +147,8 @@ For each evidence item:
 Excerpt copying rules (strict):
 - do not paraphrase, reword, translate, or clean up the text
 - do not compute, convert, round, or combine numbers unless that exact value appears in the content
-- if the exact supporting text is not present, omit the evidence item
-- prefer the shortest contiguous span that directly supports the claim
+- if the exact text substantiating the claim is not present, omit the evidence item
+- prefer the shortest contiguous span that directly substantiates the claim
 """
 
 EXCERPT_DERIVATION_SYSTEM_PROMPT = """

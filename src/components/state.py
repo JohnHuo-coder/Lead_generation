@@ -14,6 +14,11 @@ class ResearchAgentState(AgentState):
     failed_evidence_checks: Annotated[list[EvidenceCheckFailure], add]
     batch_result_id_match_failures: Annotated[int, add]
     off_target_company_rejections: Annotated[int, add]
+    duplicate_search_result_skips: Annotated[int, add]
+    duplicate_claim_skips: Annotated[int, add]
+    empty_evidence_tool_calls: Annotated[int, add]
+    fallback_extract_attempts: Annotated[int, add]
+    fallback_verified_hits: Annotated[int, add]
     excerpt_derivation_checks: Annotated[int, add]
     evidence_full_snippet_verifications: Annotated[int, add]
     evidence_full_page_extracts: Annotated[int, add]
@@ -30,10 +35,16 @@ class ResearchState(TypedDict):
     verified_evidence: Annotated[list[Evidence], add]
 
     sufficient: bool | None
+    sufficient_reason: str
     search_tool_call_count: int
 
     batch_result_id_match_failures: Annotated[int, add]
     off_target_company_rejections: Annotated[int, add]
+    duplicate_search_result_skips: Annotated[int, add]
+    duplicate_claim_skips: Annotated[int, add]
+    empty_evidence_tool_calls: Annotated[int, add]
+    fallback_extract_attempts: Annotated[int, add]
+    fallback_verified_hits: Annotated[int, add]
     excerpt_derivation_checks: Annotated[int, add]
     evidence_full_snippet_verifications: Annotated[int, add]
     evidence_full_page_extracts: Annotated[int, add]

@@ -26,6 +26,11 @@ FAILURE_REASON_LABELS = {
 PIPELINE_STAT_FIELDS = (
     "batch_result_id_match_failures",
     "off_target_company_rejections",
+    "duplicate_search_result_skips",
+    "duplicate_claim_skips",
+    "empty_evidence_tool_calls",
+    "fallback_extract_attempts",
+    "fallback_verified_hits",
     "excerpt_derivation_checks",
     "evidence_full_snippet_verifications",
     "evidence_full_page_extracts",
@@ -33,7 +38,12 @@ PIPELINE_STAT_FIELDS = (
 
 PIPELINE_STAT_LABELS = {
     "batch_result_id_match_failures": "Batch result_id match failures (evidence)",
-    "off_target_company_rejections": "Off-target company rejections (evidence)",
+    "off_target_company_rejections": "Off-target company rejections (search documents)",
+    "duplicate_search_result_skips": "Duplicate search result skips (search)",
+    "duplicate_claim_skips": "Duplicate claim skips (evidence)",
+    "empty_evidence_tool_calls": "Empty-evidence tool calls (primary batch)",
+    "fallback_extract_attempts": "Fallback extract attempts (reserve batch)",
+    "fallback_verified_hits": "Fallback verified hits (reserve batch)",
     "excerpt_derivation_checks": "Excerpt derivation LLM checks (excerpt)",
     "evidence_full_snippet_verifications": "Full snippet verifications (evidence)",
     "evidence_full_page_extracts": "Full-page extracts (evidence)",
@@ -134,6 +144,7 @@ def build_run_report(state: dict[str, Any]) -> dict[str, Any]:
         "company": state.get("company"),
         "requirement": state.get("requirement"),
         "sufficient": state.get("sufficient"),
+        "sufficient_reason": state.get("sufficient_reason") or "",
         "search_tool_call_count": state.get("search_tool_call_count", 0),
         "additional_evidence_needed": state.get("additional_evidence_needed") or [],
         "evidence_total": evidence_total,
@@ -263,6 +274,7 @@ def format_run_report(report: dict[str, Any]) -> str:
         lines.append(f"Verify success rate: {report['verify_success_rate']:.1%}")
 
     lines.extend(_format_additional_evidence_needed(report))
+    lines.extend(_format_sufficient_reason(report))
 
     if report["failure_reason_counts"]:
         lines.append("Failure breakdown:")
@@ -338,6 +350,14 @@ def format_batch_summary(summary: dict[str, Any]) -> str:
             average = pipeline_stats_averages.get(field)
             avg_text = f"{average:.2f}" if average is not None else "n/a"
             lines.append(f"  - {PIPELINE_STAT_LABELS[field]}: {avg_text}")
+
+    fallback_attempts = pipeline_stats.get("fallback_extract_attempts", 0)
+    if fallback_attempts:
+        fallback_hits = pipeline_stats.get("fallback_verified_hits", 0)
+        lines.append(
+            f"Fallback verified hit rate: {fallback_hits / fallback_attempts:.1%} "
+            f"({fallback_hits}/{fallback_attempts})"
+        )
 
     if summary["failure_reason_counts"]:
         lines.append("Failure reason distribution:")
@@ -461,6 +481,16 @@ def _format_additional_evidence_needed(report: dict[str, Any]) -> list[str]:
     return lines
 
 
+def _format_sufficient_reason(report: dict[str, Any]) -> list[str]:
+    if report.get("sufficient") is not True:
+        return []
+
+    reason = (report.get("sufficient_reason") or "").strip()
+    if not reason:
+        return ["Sufficient reason: (none provided)"]
+    return [f"Sufficient reason: {reason}"]
+
+
 def _render_source_content_block(content: str, *, label: str = "Source content") -> str:
     if not content:
         return f"<div><strong>{_escape(label)}:</strong> <em>Not available</em></div>"
@@ -542,6 +572,21 @@ def _render_run_report_html(report: dict[str, Any]) -> str:
             "</div>"
         )
 
+    sufficient_reason_section = ""
+    if sufficient is True:
+        reason = (report.get("sufficient_reason") or "").strip()
+        reason_body = (
+            f"<p>{_escape(reason)}</p>"
+            if reason
+            else "<p class='muted'>No reason provided.</p>"
+        )
+        sufficient_reason_section = (
+            "<div class='sufficient-callout'>"
+            "<h3>Why Sufficient</h3>"
+            f"{reason_body}"
+            "</div>"
+        )
+
     return f"""
 <section class="run-report">
   <h2>{_escape(report.get('company'))}</h2>
@@ -556,6 +601,7 @@ def _render_run_report_html(report: dict[str, Any]) -> str:
     {pipeline_metrics}
   </div>
   {additional_evidence_section}
+  {sufficient_reason_section}
   <h3>Verified Evidence</h3>
   {verified_items}
   <h3>Failed Evidence Checks</h3>
@@ -692,6 +738,18 @@ def render_batch_summary_html(summary: dict[str, Any], *, title: str = "Research
     .insufficient-callout h3 {{
       margin-top: 0;
       color: var(--failure);
+    }}
+    .sufficient-callout {{
+      margin: 16px 0 20px;
+      padding: 14px 16px;
+      background: #ecfdf5;
+      border: 1px solid #6ee7b7;
+      border-left: 4px solid var(--success);
+      border-radius: 12px;
+    }}
+    .sufficient-callout h3 {{
+      margin-top: 0;
+      color: var(--success);
     }}
     code {{
       background: #f3f4f6;

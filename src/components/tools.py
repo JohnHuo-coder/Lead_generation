@@ -3,105 +3,233 @@ from tavily import TavilyClient
 from langchain.messages import ToolMessage
 from langgraph.types import Command
 
+from components.constants import MAX_RESULTS_PER_SEARCH, MAX_SEARCH_CALLS, TAVILY_MAX_RESULTS
 from components.evidence_verification import merge_verification_updates, verify_evidence_item
 from components.state import ResearchAgentState
-from services.search_evidence_extractor import extract_evidence_from_search_batch
+from schemas.research_schemas import SearchDocument
+from services.search_evidence_extractor import (
+    document_mentions_company,
+    extract_evidence_from_search_batch,
+)
 
 tavily_client = TavilyClient()
 
 
-def _format_verification_summary(
+def _format_tool_message_for_agent(
     *,
+    searches_used: int,
     verified_batch: list,
-    failed_batch: list[dict],
-    verified_so_far: list,
-    off_target_company_rejections: int,
 ) -> str:
-    lines: list[str] = []
-    if off_target_company_rejections:
-        lines.append(
-            f"Rejected {off_target_company_rejections} evidence item(s) because the source "
-            "did not mention the target company; retarget searches with the property's own "
-            "domain or site: scoping."
-        )
+    lines = [f"Searches used: {searches_used} / {MAX_SEARCH_CALLS}", "", "Verified this search:"]
+
     if verified_batch:
-        lines.append("Verified from this batch:")
         lines.extend(f"- {item.claim}" for item in verified_batch)
-    if failed_batch:
-        lines.append("Rejected from this batch:")
-        for failure in failed_batch:
-            lines.append(
-                f"- {failure.get('claim')} ({failure.get('failure_reason')})"
-            )
-    if verified_so_far:
-        lines.append(f"Verified evidence so far ({len(verified_so_far)}):")
-        lines.extend(f"- {item.claim}" for item in verified_so_far)
-    if not lines:
-        lines.append("No verified evidence from this batch.")
+    else:
+        lines.append("- none")
+        lines.append("No verified evidence from this search; try a different search angle.")
+
     return "\n".join(lines)
 
 
-@tool
-def web_search(query: str, runtime: ToolRuntime[ResearchAgentState]) -> dict:
-    """Search the web for pages about a company and return source URLs and excerpts."""
-    response = tavily_client.search(query, max_results=5)
-    search_documents = {}
-    result_index_lines = []
-    for index, item in enumerate(response["results"]):
-        result_id = f"{runtime.tool_call_id}_{index}"
-        document = {
-            "query": query,
-            "title": item["title"],
-            "url": item["url"],
-            "content": item["content"],
-        }
-        search_documents[result_id] = document
-        result_index_lines.append(
-            f"- result_id={result_id} | title={document['title']} | url={document['url']}"
-        )
+def _is_duplicate_document(url: str, content: str, known_documents: dict[str, str]) -> bool:
+    return url in known_documents and known_documents[url] == content
 
-    all_search_documents = {
-        **(runtime.state.get("search_documents") or {}),
-        **search_documents,
+
+def _document_from_result(item: dict, *, query: str, search_focus: str) -> SearchDocument:
+    return {
+        "query": query,
+        "search_focus": search_focus,
+        "title": item["title"],
+        "url": item["url"],
+        "content": item["content"],
     }
-    (
-        batch_evidence,
-        result_id_match_failures,
+
+
+def _collect_search_batches(
+    results: list[dict],
+    *,
+    query: str,
+    search_focus: str,
+    company: str,
+    known_documents: dict[str, str],
+    tool_call_id: str,
+) -> tuple[dict[str, SearchDocument], dict[str, SearchDocument], int, int]:
+    primary_documents: dict[str, SearchDocument] = {}
+    reserve_documents: dict[str, SearchDocument] = {}
+    skipped_duplicate_results = 0
+    off_target_company_rejections = 0
+
+    for item in results:
+        url = item["url"]
+        content = item["content"]
+        if _is_duplicate_document(url, content, known_documents):
+            skipped_duplicate_results += 1
+            continue
+
+        document = _document_from_result(item, query=query, search_focus=search_focus)
+        if not document_mentions_company(document, company):
+            off_target_company_rejections += 1
+            continue
+
+        if len(primary_documents) < MAX_RESULTS_PER_SEARCH:
+            known_documents[url] = content
+            result_id = f"{tool_call_id}_{len(primary_documents)}"
+            primary_documents[result_id] = document
+        elif len(reserve_documents) < MAX_RESULTS_PER_SEARCH:
+            known_documents[url] = content
+            result_id = f"{tool_call_id}_r{len(reserve_documents)}"
+            reserve_documents[result_id] = document
+        else:
+            break
+
+    return (
+        primary_documents,
+        reserve_documents,
+        skipped_duplicate_results,
         off_target_company_rejections,
-    ) = extract_evidence_from_search_batch(
-        company=runtime.state.get("company", ""),
-        collaboration_intent=runtime.state.get("collaboration_intent", ""),
-        requirement=runtime.state.get("requirement", ""),
-        batch_documents=search_documents,
     )
 
+
+def _extract_and_verify_batch(
+    batch_documents: dict[str, SearchDocument],
+    *,
+    company: str,
+    collaboration_intent: str,
+    requirement: str,
+    search_query: str,
+    search_focus: str,
+    prior_verified_evidence: list,
+    all_search_documents: dict[str, SearchDocument],
+) -> tuple[dict, int, int]:
+    if not batch_documents:
+        return {}, 0, 0
+
+    prior_verified_claims = [
+        item.claim for item in prior_verified_evidence
+    ]
+    batch_evidence, result_id_match_failures = extract_evidence_from_search_batch(
+        company=company,
+        collaboration_intent=collaboration_intent,
+        requirement=requirement,
+        search_query=search_query,
+        search_focus=search_focus,
+        prior_verified_claims=prior_verified_claims,
+        batch_documents=batch_documents,
+    )
     verification_updates = [
         verify_evidence_item(
             evidence,
-            company=runtime.state.get("company", ""),
+            company=company,
             search_documents=all_search_documents,
         )
         for evidence in batch_evidence
     ]
-    merged_verification = merge_verification_updates(verification_updates)
-    verified_batch = merged_verification.get("verified_evidence") or []
-    failed_batch = merged_verification.get("failed_evidence_checks") or []
-    verified_so_far = [
-        *(runtime.state.get("verified_evidence") or []),
-        *verified_batch,
-    ]
-
-    verification_summary = _format_verification_summary(
-        verified_batch=verified_batch,
-        failed_batch=failed_batch,
-        verified_so_far=verified_so_far,
-        off_target_company_rejections=off_target_company_rejections,
+    merged_verification, duplicate_claim_skips = merge_verification_updates(
+        verification_updates,
+        prior_verified_evidence,
     )
-    result_string = (
-        f"Search query: {query}\n"
-        f"Results:\n"
-        f"{chr(10).join(result_index_lines) or '- No results'}\n\n"
-        f"{verification_summary}"
+    return merged_verification, result_id_match_failures, duplicate_claim_skips
+
+
+@tool
+def web_search(
+    query: str,
+    search_focus: str,
+    runtime: ToolRuntime[ResearchAgentState],
+) -> dict:
+    """Search the web for sources. query is for retrieval; search_focus guides evidence extraction."""
+    response = tavily_client.search(query, max_results=TAVILY_MAX_RESULTS)
+    prior_search_documents = runtime.state.get("search_documents") or {}
+    known_documents = {
+        document["url"]: document["content"]
+        for document in prior_search_documents.values()
+    }
+
+    company = runtime.state.get("company", "")
+    (
+        primary_documents,
+        reserve_documents,
+        skipped_duplicate_results,
+        off_target_company_rejections,
+    ) = _collect_search_batches(
+        response["results"],
+        query=query,
+        search_focus=search_focus,
+        company=company,
+        known_documents=known_documents,
+        tool_call_id=runtime.tool_call_id,
+    )
+
+    prior_verified = runtime.state.get("verified_evidence") or []
+    search_documents = dict(primary_documents)
+    all_search_documents = {**prior_search_documents, **search_documents}
+
+    primary_merged, result_id_match_failures, duplicate_claim_skips = _extract_and_verify_batch(
+        primary_documents,
+        company=company,
+        collaboration_intent=runtime.state.get("collaboration_intent", ""),
+        requirement=runtime.state.get("requirement", ""),
+        search_query=query,
+        search_focus=search_focus,
+        prior_verified_evidence=prior_verified,
+        all_search_documents=all_search_documents,
+    )
+
+    empty_evidence_tool_calls = 0
+    fallback_extract_attempts = 0
+    fallback_verified_hits = 0
+
+    primary_verified = primary_merged.get("verified_evidence") or []
+    merged_verification = primary_merged
+
+    if primary_documents and not primary_verified and reserve_documents:
+        empty_evidence_tool_calls = 1
+        fallback_extract_attempts = 1
+
+        verified_after_primary = [
+            *prior_verified,
+            *primary_verified,
+        ]
+        search_documents = {**primary_documents, **reserve_documents}
+        all_search_documents = {**prior_search_documents, **search_documents}
+
+        fallback_merged, fallback_match_failures, fallback_claim_skips = _extract_and_verify_batch(
+            reserve_documents,
+            company=company,
+            collaboration_intent=runtime.state.get("collaboration_intent", ""),
+            requirement=runtime.state.get("requirement", ""),
+            search_query=query,
+            search_focus=search_focus,
+            prior_verified_evidence=verified_after_primary,
+            all_search_documents=all_search_documents,
+        )
+        result_id_match_failures += fallback_match_failures
+        duplicate_claim_skips += fallback_claim_skips
+
+        for key in (
+            "verified_evidence",
+            "failed_evidence_checks",
+            "excerpt_derivation_checks",
+            "evidence_full_snippet_verifications",
+            "evidence_full_page_extracts",
+        ):
+            values = fallback_merged.get(key)
+            if not values:
+                continue
+            if key in {"verified_evidence", "failed_evidence_checks"}:
+                merged_verification.setdefault(key, []).extend(values)
+            else:
+                merged_verification[key] = merged_verification.get(key, 0) + values
+
+        if fallback_merged.get("verified_evidence"):
+            fallback_verified_hits = 1
+
+    verified_batch = merged_verification.get("verified_evidence") or []
+
+    searches_used = runtime.state.get("tool_call_count", 0) + 1
+    result_string = _format_tool_message_for_agent(
+        searches_used=searches_used,
+        verified_batch=verified_batch,
     )
 
     update: dict = {
@@ -109,6 +237,11 @@ def web_search(query: str, runtime: ToolRuntime[ResearchAgentState]) -> dict:
         "search_documents": search_documents,
         "batch_result_id_match_failures": result_id_match_failures,
         "off_target_company_rejections": off_target_company_rejections,
+        "duplicate_search_result_skips": skipped_duplicate_results,
+        "duplicate_claim_skips": duplicate_claim_skips,
+        "empty_evidence_tool_calls": empty_evidence_tool_calls,
+        "fallback_extract_attempts": fallback_extract_attempts,
+        "fallback_verified_hits": fallback_verified_hits,
         "messages": [
             ToolMessage(
                 content=result_string,

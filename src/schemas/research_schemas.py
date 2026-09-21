@@ -5,6 +5,7 @@ from pydantic import BaseModel, Field
 
 class SearchDocument(TypedDict):
     query: str
+    search_focus: str
     title: str
     url: str
     content: str
@@ -84,6 +85,14 @@ class ResearchResult(BaseModel):
             "Specific information still missing from the collected evidence; "
             "return an empty list when sufficient=true. Do not put search queries here."
         )
+    )
+    reason: str = Field(
+        default="",
+        description=(
+            "When sufficient=true, briefly explain which verified claims cover the "
+            "requirement and why that is enough to evaluate it. Cite the key facts, "
+            "not whether the company qualifies. Return an empty string when sufficient=false."
+        ),
     )
 
 class ExcerptDerivationResult(BaseModel):

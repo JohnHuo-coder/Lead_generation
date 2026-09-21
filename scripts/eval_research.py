@@ -58,6 +58,7 @@ def _format_research_output(state: dict[str, Any], *, verbose: bool = False) -> 
             _serialize_item(item) for item in state.get("failed_evidence_checks") or []
         ],
         "sufficient": state.get("sufficient"),
+        "reason": state.get("sufficient_reason") or "",
     }
     if verbose:
         output["company"] = state.get("company")
