@@ -42,8 +42,31 @@ def _format_verification_summary(
 
 
 @tool
-def web_search(query: str, runtime: ToolRuntime[ResearchAgentState]) -> dict:
-    """Search the web for pages about a company and return source URLs and excerpts."""
+def web_search(
+    query: str | None = None,
+    search_focus: str | None = None,
+    *,
+    runtime: ToolRuntime[ResearchAgentState],
+) -> dict:
+    """Search the web and return source URLs, excerpts, and verified evidence."""
+    query = (query or "").strip()
+    if not query:
+        return Command(
+            update={
+                "messages": [
+                    ToolMessage(
+                        content=(
+                            "Please provide a non-empty `query` for web_search. "
+                            "The optional `search_focus` should describe the evidence needed."
+                        ),
+                        tool_call_id=runtime.tool_call_id,
+                    )
+                ]
+            }
+        )
+
+    search_focus = (search_focus or "").strip()
+    resolved_focus = search_focus or (runtime.state.get("requirement") or "").strip() or query
     response = tavily_client.search(query, max_results=5)
     search_documents = {}
     result_index_lines = []
@@ -71,7 +94,7 @@ def web_search(query: str, runtime: ToolRuntime[ResearchAgentState]) -> dict:
     ) = extract_evidence_from_search_batch(
         company=runtime.state.get("company", ""),
         collaboration_intent=runtime.state.get("collaboration_intent", ""),
-        requirement=runtime.state.get("requirement", ""),
+        requirement=resolved_focus,
         batch_documents=search_documents,
     )
 

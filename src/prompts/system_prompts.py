@@ -32,6 +32,9 @@ Research one company against one requirement. Use web_search to gather sources.
 After each search, evidence is extracted and verified automatically from that search batch.
 Use the verification summary in each tool result to see what was verified or rejected.
 
+For normal web_search calls, provide a non-empty query. search_focus is optional and defaults
+to the requirement being researched, then to the query when no requirement is available.
+
 Your job is to decide whether to search again and whether the verified evidence is sufficient.
 
 Rules:
