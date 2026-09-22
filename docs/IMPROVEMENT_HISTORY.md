@@ -1,7 +1,7 @@
 # Research Pipeline 改进历史
 
 记录每次 batch test 前后改了什么，方便对比报告、回溯决策。  
-**当前 main 已 push 到：** `66d6c4f` · **本地还有未 commit 改动**（见阶段 8–10 与文末「进行中」）。
+**当前 main 已 push 到：** `028072b` · 工作区干净，阶段 8–11 全部已合入。
 
 ---
 
@@ -226,7 +226,7 @@ commit：`3570f5e`（**只在远端分支，未进 main**）
 
 ---
 
-## 阶段 8：URL Selector 全文抽取 — `local-only`（9/21）
+## 阶段 8：URL Selector 全文抽取 — `63b9fe5` ✅ merged（9/21）
 
 **动机：** Tavily snippet 常缺 capacity / 会议详情；一次 search 拉 10 条，但 extract 只用 5 条，希望 **智能选 1–2 页拉全文**。
 
@@ -244,7 +244,7 @@ commit：`3570f5e`（**只在远端分支，未进 main**）
 
 ---
 
-## 阶段 9：Planner / Executor 拆分 — `research_search` + Query Generator — `local-only`（9/21）
+## 阶段 9：Planner / Executor 拆分 — `research_search` + Query Generator — `63b9fe5` ✅ merged（9/21）
 
 **动机：** agent 同时写 query + focus 负担大；query 应是检索工程，focus 才是 planning。
 
@@ -262,7 +262,7 @@ commit：`3570f5e`（**只在远端分支，未进 main**）
 
 ---
 
-## 阶段 10：Verify 复用已全文页面 — `local-only`（9/21）
+## 阶段 10：Verify 复用已全文页面 — `63b9fe5` ✅ merged（9/21）
 
 **动机：** URL Selector 已拉全文的 URL，在 verify 的 `unclear_ownership` 路径不应再调 Tavily Extract。
 
@@ -272,6 +272,42 @@ commit：`3570f5e`（**只在远端分支，未进 main**）
 - 仅非 full_page 才 `extract_page_content()` 并计入 `evidence_full_page_extracts`
 
 **文件：** `evidence_verification.py`
+
+---
+
+## 阶段 11：sufficient 必须三要素齐全 + 排除 OTA 住客规定 — `028072b` ✅ merged（9/22）
+
+**来源：** Engine PR `issues-agent/525d26e4`（commit `e4c74ad`），只改 system prompt。
+
+**动机（v5 发现的 bug）：** 某些 run 里唯一 verified claim 是 Booking.com 的住客规定（如
+"Parties/events are not allowed"），agent 却据此认为「已能评估 20–60 人会议场地 + 餐饮」
+→ `sufficient=true` 并**停止搜索**。等于没查过设施就结案，下游 fit score 直接判不合格。
+
+**根因：**
+
+- `SEARCH_BATCH_EVIDENCE_PROMPT` 只排除 marketing copy / amenity list，**没排除 OTA house rules**；
+  "events are not allowed" 与 search_focus「有没有 event space」字面相关 → 被抽成 claim 并 verify
+- `RESEARCH_AGENT_SYSTEM_PROMPT` / `RESEARCH_FINAL_SYSTEM_PROMPT` 只要求「有 verified claims」，
+  **未强制**覆盖设施 / 容量 / 餐饮三个维度
+
+**改动（+20 行，纯新增）：**
+
+1. **Agent + Final prompt：** `sufficient=true` 必须三要素齐全 —— 自有 private meeting/event space、
+   明确容量或面积、团体餐饮/宴会服务；**只满足 1–2 项即为不足**
+2. **明确否定：** guest-conduct / house-rules 语句（如禁止派对）**单独永不构成 sufficient**，
+   也不得当作会议空间或餐饮「存在或不存在」的证据
+3. **Extract prompt：** 不再抽 OTA house rules / guest-conduct（禁止派对、入退房时间、吸烟、
+   宠物、安静时段、年龄政策）；普通住客服务（如早餐）也不算团体餐饮证据
+
+**文件：** `system_prompts.py`（仅此一个）
+
+**合并说明：** PR 基于 `66d6c4f`，与阶段 9 重写的 rules 段有文本差异，但三方合并**无冲突**，
+阶段 9 的 `research_search` 措辞被保留。
+
+**注意：** 新规则把 **20–60 人**写进了 system prompt，而 requirement 是运行时通过 HumanMessage
+传入的 —— 若日后换 requirement，这段硬编码会与实际 requirement 不一致，需改为参数化。
+
+**待验证：** 需跑 **v6** 看 sufficient rate 是否因此下降（预期下降，但属于修正虚高）。
 
 ---
 
@@ -285,6 +321,7 @@ Requirement（固定）：
 | v3（nano） | gpt-5-nano | **36.7%** | 97.0% | 100 | 3.3 | 阶段 5–6 本地改动 |
 | v4（mini） | gpt-5-mini | **33.3%** | 95.1% | 122 | 3.5 | 阶段 7；evidence 更多但 sufficient 未升 |
 | **v5（mini）** | gpt-5-mini | **40.0%** | 100.0% | 78 | 3.5 | 阶段 8–10；`model_gpt-5-mini_research_report_v5.html`（2026-09-21） |
+| v6（mini） | gpt-5-mini | *未跑* | — | — | — | 阶段 11 后待跑；验证 house-rules 误判是否消除 |
 
 > **注：** 阶段 10 改完后跑 **test v5**（2026-09-21 20:58 UTC）。
 
@@ -313,35 +350,23 @@ Requirement（固定）：
 
 ---
 
-## 进行中 / 未 commit（截至 2026-09-21）
+## 进行中（截至 2026-09-22）
 
-**已 push（`66d6c4f`）：** 阶段 5–7 + sufficient `reason`
+**已 push：** 阶段 5–7 + `reason`（`66d6c4f`）、阶段 8–10（`63b9fe5`）、阶段 11（`028072b`）
 
-**本地未 push（阶段 8–10）：**
-
-```
-src/components/constants.py
-src/components/tools.py
-src/components/evidence_verification.py
-src/components/nodes.py
-src/components/state.py
-src/llm/models.py
-src/prompts/system_prompts.py
-src/reporting/research_report.py
-src/schemas/research_schemas.py
-src/services/query_generator.py    (new)
-src/services/url_selector.py         (new)
-```
+**工作区干净**，无未 commit 改动。下一步：跑 **v6** 验证阶段 11。
 
 ---
 
 ## 已知问题 & 待做（讨论过、未实现）
 
-1. **Deterministic sufficiency** — requirement 拆 checklist，用 verified claims 规则匹配，不让 agent 主观拍板
-2. **Query Generator 域名启发式** — prior URLs 目前纯 LLM 推断 `site:`，可加规则
-3. **Selector 用 search `raw_content`** — 对比 Tavily Extract，省 API / 降延迟（讨论过，未改）
-4. **Engine PR #2** — 未 merge；本地 dedupe 逻辑已覆盖部分意图，但未 1:1 对齐 PR
-5. **Sufficient 子集分析** — 不只看 overall rate，看 sufficient runs 的 tool calls 与 claim 质量
+1. **阶段 11 的 20–60 硬编码** — requirement 走 HumanMessage 传入，但 prompt 里写死了人数，
+   换 requirement 会不一致；应参数化
+2. **Deterministic sufficiency** — requirement 拆 checklist，用 verified claims 规则匹配，不让 agent 主观拍板
+3. **Query Generator 域名启发式** — prior URLs 目前纯 LLM 推断 `site:`，可加规则
+4. **Selector 用 search `raw_content`** — 对比 Tavily Extract，省 API / 降延迟（讨论过，未改）
+5. **Engine PR #2** — 未 merge；本地 dedupe 逻辑已覆盖部分意图，但未 1:1 对齐 PR
+6. **Sufficient 子集分析** — 不只看 overall rate，看 sufficient runs 的 tool calls 与 claim 质量
 
 ---
 
@@ -357,7 +382,9 @@ src/services/url_selector.py         (new)
 | `b4f48c5` | Eval script + insufficient runs 报告 | merged |
 | `3570f5e` | Skip duplicate sources（Engine PR #2） | **未 merge** |
 | `66d6c4f` | search_focus、Tavily 10、fallback、fact extract、mini、 sufficient reason | merged |
-| 本地 | URL Selector、research_search + Query Generator、verify 全文复用 | **未 commit** |
+| `63b9fe5` | URL Selector、research_search + Query Generator、verify 全文复用 | merged |
+| `e4c74ad` | sufficient 三要素齐全 + 排除 OTA house rules（Engine PR） | merged |
+| `028072b` | Merge `issues-agent/525d26e4` → main | merged |
 
 ---
 
