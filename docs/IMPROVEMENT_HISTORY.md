@@ -1,7 +1,7 @@
 # Research Pipeline 改进历史
 
 记录每次 batch test 前后改了什么，方便对比报告、回溯决策。  
-**当前 main 已 push 到：** `71bad5b` · 工作区干净，阶段 8–12 全部已合入。
+**当前 main 已 push 到：** `a297567` · 工作区干净，阶段 8–13 全部已合入。
 
 ---
 
@@ -351,6 +351,70 @@ sufficient 基本不变（因为原 fallback 命中率为 0）。
 
 ---
 
+## 阶段 13：负证据出口 + 取消人数硬编码 — `a297567` ✅ merged（9/22）
+
+**背景：** 阶段 11 上线后复盘「house rules 算不算负证据」。直觉是「不准 party 那基本就办不了，
+fit score 给低分 pass 就行」—— 结论方向对，但**推理不成立**。
+
+### 为什么 house rules 不是负证据
+
+该字段在 Booking.com Extranet 的位置是 **Property → Property policies → House rules**，与 pets /
+smoking / quiet hours / check-in 并列，管的是**住客在客房内的行为**（防噪音、防损坏、拒 hen/stag
+party），与酒店是否经营宴会 / MICE 是两条独立业务线。
+
+**硬反例**（Booking 页面同时写着 "Parties/events are not allowed"）：
+
+| 物业 | 场地情况 |
+|---|---|
+| La Piazza Hotel **and Convention Center** | 名称即含会议中心 |
+| Treebo Petals **Banquet** & Suites | 名称即含宴会 |
+| Residence & **Conference Centre** - Kitchener-Waterloo | amenities 明确列 "Meeting/Banquet facilities" |
+
+第三例的物业类型是 **Condo Hotel**，与 v5 误判的 Olive Hotel Bangkok 64 同类 —— 连
+「condo hotel 必无场地」的相关性都不成立。**假负率高，不可用作负证据。**
+
+### v5 实测（审计报告 HTML）
+
+- 仅 **2 / 30** 家走了该路径，且**均为 0 条设施 claim 即 sufficient**：
+  Olive Hotel Bangkok 64（2 次搜索）、T2 The Portal Sukhumvit（1 条 claim）
+- 两家实为 serviced apartment，结论大概率正确，但属**碰巧对**；verify 还给该 claim 盖了
+  "Directly contradicts the requirement"，把错误判定写入了 evidence 数据集
+
+### 但阶段 11 确实堵死了合法负证据
+
+搜索预算审计（v5）：
+
+```
+sufficient  : 12 runs, 32 次搜索, 平均 2.67
+insufficient: 18 runs, 72 次搜索, 平均 4.00  ← 18/18 全部烧满预算
+其中 0 条 evidence : 8 家（HOP INN、Nine Place 40、Studio Ekkamai、SKYE、
+                      The Quarter On Nut、Kiwi Capsule、iCheck inn、Le Fenix）
+```
+
+阶段 11 要求三要素**全部正向**，导致「该物业确实没有会议设施」无法收敛 —— 即使官网明确说没有，
+也只能烧完 4 次预算以 `sufficient=false` 收场。
+
+**改动：**
+
+1. `sufficient=true` 明确为**两条路径**：
+   - **POSITIVE**（不变）：三要素齐全 —— 自有会议/活动空间、明确容量、团体餐饮
+   - **NEGATIVE**（新增）：verified claim 说明该物业**无自有会议/活动空间**，或其空间无法承接
+     所需人数的团体活动
+2. NEGATIVE 路径**限定来源**：物业官网/官方材料，或该物业的 venue/MICE 目录条目
+3. house rules / guest-conduct（禁 party、宠物、吸烟、安静时段、入退房）**两条路径都不满足**，
+   并在 prompt 里写明理由（经营宴会的物业同样会发布这些条款）
+4. 抽取端放开：源文本**明确陳述**无场地时可作为 claim；但「页面只是没提到」不算
+5. 「'not found' 不等于 requirement 为假」补一句：**搜索无结果不构成负 claim**
+6. **顺带修掉阶段 11 的待办** —— 规范性条款里的 `20-60` 改为 "the required headcount"，
+   不再与运行时 requirement 冲突（剩余 `20-60` 仅存在于示例文本，无害）
+
+**文件：** `system_prompts.py`（`RESEARCH_AGENT_*`, `RESEARCH_FINAL_*`, `SEARCH_BATCH_EVIDENCE_*`）
+
+**待验证：** v6 观察 —— 预期 8 家 0-evidence 里部分转为 NEGATIVE 路径提前收敛（省搜索预算），
+同时 house-rules 误判归零。
+
+---
+
 ## Batch 测试记录（30 家 Bangkok 酒店）
 
 Requirement（固定）：
@@ -361,7 +425,7 @@ Requirement（固定）：
 | v3（nano） | gpt-5-nano | **36.7%** | 97.0% | 100 | 3.3 | 阶段 5–6 本地改动 |
 | v4（mini） | gpt-5-mini | **33.3%** | 95.1% | 122 | 3.5 | 阶段 7；evidence 更多但 sufficient 未升 |
 | **v5（mini）** | gpt-5-mini | **40.0%** | 100.0% | 78 | 3.5 | 阶段 8–10；`model_gpt-5-mini_research_report_v5.html`（2026-09-21） |
-| v6（mini） | gpt-5-mini | *未跑* | — | — | — | 阶段 11–12 后待跑；验证 house-rules 误判消除 + fallback 删除影响 |
+| v6（mini） | gpt-5-mini | *未跑* | — | — | — | 阶段 11–13 后待跑；验证 house-rules 误判消除、fallback 删除、负证据出口 |
 
 > **注：** 阶段 10 改完后跑 **test v5**（2026-09-21 20:58 UTC）。
 
@@ -404,13 +468,15 @@ Requirement（固定）：
 
 ## 已知问题 & 待做（讨论过、未实现）
 
-1. **阶段 11 的 20–60 硬编码** — requirement 走 HumanMessage 传入，但 prompt 里写死了人数，
-   换 requirement 会不一致；应参数化
-2. **Deterministic sufficiency** — requirement 拆 checklist，用 verified claims 规则匹配，不让 agent 主观拍板
+1. **Deterministic sufficiency** — requirement 拆 checklist，用 verified claims 规则匹配，不让 agent 主观拍板
+2. **NEGATIVE 路径来源校验无代码约束** — 目前靠 prompt 让 LLM 自判「是否官网/MICE 目录」，
+   可考虑按域名做确定性判定（阶段 13 遗留）
 3. **Query Generator 域名启发式** — prior URLs 目前纯 LLM 推断 `site:`，可加规则
 4. **Selector 用 search `raw_content`** — 对比 Tavily Extract，省 API / 降延迟（讨论过，未改）
 5. **Engine PR #2** — 未 merge；本地 dedupe 逻辑已覆盖部分意图，但未 1:1 对齐 PR
 6. **Sufficient 子集分析** — 不只看 overall rate，看 sufficient runs 的 tool calls 与 claim 质量
+
+> 阶段 11 的「20–60 硬编码」已在阶段 13 修掉。
 
 ---
 
@@ -431,6 +497,7 @@ Requirement（固定）：
 | `028072b` | Merge `issues-agent/525d26e4` → main | merged |
 | `43c92ac` | remove duplicate reserve extraction retry（Engine PR） | **未 merge**（改用 `71bad5b` 重写） |
 | `71bad5b` | 删 reserve fallback 重试；只抽前 5 条 | merged |
+| `a297567` | 负证据出口；规范条款取消 20–60 硬编码 | merged |
 
 ---
 
