@@ -323,19 +323,23 @@ def verify_evidence_item(
             pipeline_stats=pipeline_stats,
         )
 
-    pipeline_stats.update(_build_pipeline_stats(evidence_full_page_extracts=1))
+    document_already_full_page = bool(document.get("full_page"))
 
-    try:
-        full_page_content = extract_page_content(evidence.url)
-    except RuntimeError as exc:
-        return _build_check_failure(
-            evidence,
-            check_stage="claim_verification",
-            failure_reason="page_extract_failed",
-            verification_reason=str(exc),
-            source_content=source_content,
-            pipeline_stats=pipeline_stats,
-        )
+    if document_already_full_page:
+        full_page_content = source_content
+    else:
+        pipeline_stats.update(_build_pipeline_stats(evidence_full_page_extracts=1))
+        try:
+            full_page_content = extract_page_content(evidence.url)
+        except RuntimeError as exc:
+            return _build_check_failure(
+                evidence,
+                check_stage="claim_verification",
+                failure_reason="page_extract_failed",
+                verification_reason=str(exc),
+                source_content=source_content,
+                pipeline_stats=pipeline_stats,
+            )
 
     expanded_page_content = _expand_content_in_page(
         full_page_content,
@@ -343,16 +347,26 @@ def verify_evidence_item(
         context_chars=FULL_PAGE_CONTEXT_CHARS,
     )
 
-    retry_result = _run_claim_verification(
-        company=company,
-        claim=evidence.claim,
-        source_content=expanded_page_content,
-        content_note=(
+    if document_already_full_page:
+        ownership_note = (
+            "Source type: full page content already available for this URL "
+            "(reused from URL selector or an earlier extract). "
+            "Ownership was unclear in the excerpt-based check; retrying with "
+            "expanded context from the stored full page."
+        )
+    else:
+        ownership_note = (
             "Source type: full page content extracted with Tavily Extract because "
             "ownership was unclear in the shorter search snippet. "
             "The provided text is an expanded window around the original search snippet "
             "within the full page."
-        ),
+        )
+
+    retry_result = _run_claim_verification(
+        company=company,
+        claim=evidence.claim,
+        source_content=expanded_page_content,
+        content_note=ownership_note,
     )
 
     if retry_result.support:

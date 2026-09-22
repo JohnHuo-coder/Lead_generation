@@ -12,7 +12,7 @@ from components.state import ResearchState, FitScoreState, ResearchAgentState
 from schemas.research_schemas import ResearchResult
 from schemas.fit_scoring_schemas import FitScoreResult
 from components.constants import MAX_SEARCH_CALLS
-from components.tools import web_search
+from components.tools import research_search
 from prompts.system_prompts import (
     FIT_SCORING_SYSTEM_PROMPT,
     RESEARCH_AGENT_SYSTEM_PROMPT,
@@ -26,7 +26,7 @@ from llm.models import (
 
 
 @wrap_model_call
-def control_web_search(
+def control_research_search(
     request: ModelRequest,
     handler: Callable[[ModelRequest], ModelResponse],
 ) -> ModelResponse:
@@ -46,7 +46,7 @@ def control_web_search(
     remaining_tools = [
         tool
         for tool in request.tools
-        if tool.name != "web_search"
+        if tool.name != "research_search"
     ]
 
     final_messages = [
@@ -67,8 +67,8 @@ def control_web_search(
 
 research_agent = create_agent(
     model=llm,
-    tools=[web_search],
-    middleware=[control_web_search],
+    tools=[research_search],
+    middleware=[control_research_search],
     response_format=ToolStrategy(ResearchResult),
     state_schema=ResearchAgentState,
     system_prompt=RESEARCH_AGENT_SYSTEM_PROMPT.format(
@@ -90,6 +90,7 @@ def search_node(state: ResearchState) -> dict:
             ))],
             "tool_call_count": 0,
             "search_documents": {},
+            "search_queries_used": [],
             "company": state["company"],
             "collaboration_intent": state["collaboration_intent"],
             "requirement": state["requirement"],
@@ -102,6 +103,9 @@ def search_node(state: ResearchState) -> dict:
             "empty_evidence_tool_calls": 0,
             "fallback_extract_attempts": 0,
             "fallback_verified_hits": 0,
+            "url_selector_extract_attempts": 0,
+            "url_selector_full_page_extracts": 0,
+            "url_selector_extract_failures": 0,
             "excerpt_derivation_checks": 0,
             "evidence_full_snippet_verifications": 0,
             "evidence_full_page_extracts": 0,
@@ -124,6 +128,9 @@ def search_node(state: ResearchState) -> dict:
         "empty_evidence_tool_calls": result.get("empty_evidence_tool_calls", 0),
         "fallback_extract_attempts": result.get("fallback_extract_attempts", 0),
         "fallback_verified_hits": result.get("fallback_verified_hits", 0),
+        "url_selector_extract_attempts": result.get("url_selector_extract_attempts", 0),
+        "url_selector_full_page_extracts": result.get("url_selector_full_page_extracts", 0),
+        "url_selector_extract_failures": result.get("url_selector_extract_failures", 0),
         "excerpt_derivation_checks": result.get("excerpt_derivation_checks", 0),
         "evidence_full_snippet_verifications": result.get("evidence_full_snippet_verifications", 0),
         "evidence_full_page_extracts": result.get("evidence_full_page_extracts", 0),

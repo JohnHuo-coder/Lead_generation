@@ -1,7 +1,7 @@
 # Research Pipeline 改进历史
 
 记录每次 batch test 前后改了什么，方便对比报告、回溯决策。  
-**当前 main 已 push 到：** `b4f48c5` · **本地还有未 commit 改动**（见文末「进行中」）。
+**当前 main 已 push 到：** `66d6c4f` · **本地还有未 commit 改动**（见阶段 8–10 与文末「进行中」）。
 
 ---
 
@@ -114,7 +114,7 @@ commit：`3570f5e`（**只在远端分支，未进 main**）
 
 ---
 
-## 阶段 5：Extract 要事实 + 去重 + Tavily 10 条按需取 — `local-only`（9/19–9/20）
+## 阶段 5：Extract 要事实 + 去重 + Tavily 10 条按需取 — `66d6c4f` ✅ merged（9/20）
 
 **动机：** verify 成功率已经 ~95%+，但 agent 仍常 insufficient；发现 extract 会 **改数字贴 requirement**、重复抽 existence claim、primary batch 经常 0 verified。
 
@@ -162,17 +162,17 @@ commit：`3570f5e`（**只在远端分支，未进 main**）
 
 ---
 
-## 阶段 6：search_focus + requirement 维度对齐 — `local-only`（9/20）
+## 阶段 6：search_focus + requirement 维度对齐 — `66d6c4f` ✅ merged（9/20）
 
 **动机：** Sora Resort trace 里 `search_focus` 要 capacity，extract 仍抽「has conference room」类 existence claim。
 
-### 6.1 `web_search(query, search_focus)`
+### 6.1 `web_search(query, search_focus)`（后于阶段 9 改为仅 `search_focus`）
 
 - `query`：给 Tavily 检索
 - `search_focus`：给 extract **PRIMARY** 指南（比 query 优先）
 - `SearchDocument` schema 增加 `search_focus` 字段
 
-### 6.2 Agent prompt：research focus 工作流
+### 6.2 Agent prompt：research focus 工作流（阶段 9 前版本）
 
 - 每次 search 必须传 **query + search_focus**
 - 流程：合并 verified → 判 sufficient → 否则选下一 focus → 再搜
@@ -195,7 +195,7 @@ commit：`3570f5e`（**只在远端分支，未进 main**）
 
 ---
 
-## 阶段 7：换模型 — `local-only`（9/20）
+## 阶段 7：换模型 — `66d6c4f` ✅ merged（9/20）
 
 **动机：** extract 仍 ignore search_focus，怀疑 nano 跟不上。
 
@@ -208,6 +208,71 @@ commit：`3570f5e`（**只在远端分支，未进 main**）
 
 **文件：** `src/llm/models.py`, `test.ipynb`
 
+**batch 结论（v3/v4）：** nano → mini 对 sufficient 提升不明显；瓶颈在检索与判定，不在 verify IQ。
+
+---
+
+## 阶段 7.1：Agent 输出 sufficient 理由 — `66d6c4f` ✅ merged（9/20）
+
+**动机：** sufficient 时要知道 agent **为什么**认为够评估，便于人工审 quality。
+
+**改动：**
+
+- `ResearchResult` 增加 `reason`；sufficient=true 时必填，false 时留空
+- State / report 字段 `sufficient_reason`；HTML **Why Sufficient** 区块
+- Agent / final prompt 同步要求
+
+**文件：** `research_schemas.py`, `system_prompts.py`, `nodes.py`, `state.py`, `research_report.py`, `eval_research.py`
+
+---
+
+## 阶段 8：URL Selector 全文抽取 — `local-only`（9/21）
+
+**动机：** Tavily snippet 常缺 capacity / 会议详情；一次 search 拉 10 条，但 extract 只用 5 条，希望 **智能选 1–2 页拉全文**。
+
+**改动：**
+
+1. **流程：** 去重 + off-target 后 → 对全部 eligible 结果跑 **URL Selector LLM** → 选 1–2 URL → **Tavily Extract** → 替换 `document.content`，`full_page=True`
+2. **优先级 prompt：** 官网 meeting/events、PDF/MICE 目录、Cvent/Northstar、OTA 等（5→1）
+3. **选中 URL 优先进 primary batch**（排在 primary 5 条前面）
+4. **去重升级：** 已 `full_page` 的 URL → **仅按 URL 去重**（不再要求 content 相同）
+5. **统计：** `url_selector_extract_attempts`, `url_selector_full_page_extracts`, `url_selector_extract_failures`
+
+**文件：** `services/url_selector.py`, `tools.py`, `system_prompts.py`（`URL_SELECTOR_SYSTEM_PROMPT`）, `research_schemas.py`, `llm/models.py`, `constants.py`, `state.py`, `nodes.py`, `research_report.py`
+
+**v5 量化：** 71 次 full-page extract；fallback verified hits 从 v3 的 2 次 → **0**；sufficient +3.3 pp。
+
+---
+
+## 阶段 9：Planner / Executor 拆分 — `research_search` + Query Generator — `local-only`（9/21）
+
+**动机：** agent 同时写 query + focus 负担大；query 应是检索工程，focus 才是 planning。
+
+**改动：**
+
+1. **工具改名：** `web_search` → **`research_search`**，只收 **`search_focus`**
+2. **Agent（Planner）：** 只看 verified → 判 sufficient / 选下一 **search_focus** → 调 `research_search`；**不再写 query**
+3. **Query Generator LLM（tool 内）：** 输入 company、requirement、search_focus、已有 verified claims、**本 run 已用 queries**、**已见 source URLs**（供 LLM 推断 `site:官网`）→ 输出 Tavily query
+4. **State：** `search_queries_used` 累计本 run 生成过的 query
+5. **Middleware：** `control_web_search` → `control_research_search`
+
+**文件：** `services/query_generator.py`, `tools.py`, `system_prompts.py`（`RESEARCH_AGENT_*`, `QUERY_GENERATOR_*`）, `nodes.py`, `state.py`, `research_schemas.py`（`QueryGeneratorResult`）, `llm/models.py`
+
+**说明：** prior URLs → `site:` **无确定性解析**，仅把 URL 列表交给 Query Generator prompt。
+
+---
+
+## 阶段 10：Verify 复用已全文页面 — `local-only`（9/21）
+
+**动机：** URL Selector 已拉全文的 URL，在 verify 的 `unclear_ownership` 路径不应再调 Tavily Extract。
+
+**改动：**
+
+- `verify_evidence_item`：`document.full_page=True` 时，ownership retry **直接复用** `document.content`
+- 仅非 full_page 才 `extract_page_content()` 并计入 `evidence_full_page_extracts`
+
+**文件：** `evidence_verification.py`
+
 ---
 
 ## Batch 测试记录（30 家 Bangkok 酒店）
@@ -219,23 +284,43 @@ Requirement（固定）：
 |---|---|---:|---:|---:|---:|---|
 | v3（nano） | gpt-5-nano | **36.7%** | 97.0% | 100 | 3.3 | 阶段 5–6 本地改动 |
 | v4（mini） | gpt-5-mini | **33.3%** | 95.1% | 122 | 3.5 | 阶段 7；evidence 更多但 sufficient 未升 |
+| **v5（mini）** | gpt-5-mini | **40.0%** | 100.0% | 78 | 3.5 | 阶段 8–10；`model_gpt-5-mini_research_report_v5.html`（2026-09-21） |
 
-**共同现象（两版）：**
+> **注：** 阶段 10 改完后跑 **test v5**（2026-09-21 20:58 UTC）。
 
-- Off-target rejections ≈ **12.8 / 公司**（搜索噪音大）
-- Empty primary batch ≈ **0.9–1.1 / 次 search**
-- Fallback 命中率 ≈ **8–9%**（26–34 次尝试仅 2–3 次 verified）
-- Full-page extract 很少触发（ownership 路径）
-- **结论：** 瓶颈在检索 + sufficient 判定 + 信息可得性，不是 verify/extract 模型 IQ
+### v5 vs v3 对比（同 30 家 Bangkok 酒店）
+
+| 指标 | v3（nano） | v5（mini + 8–10） | 变化 |
+|---|---:|---:|---|
+| Sufficient rate | 36.7% | **40.0%** | **+3.3 pp**（11/30 → 12/30） |
+| Verify 成功率 | 97.0% | **100.0%** | +3 pp（78/78，零失败） |
+| Evidence total | 100 | 78 | −22（更精、少噪音） |
+| Avg searches | 3.3 | 3.5 | +0.2 |
+| Empty primary batch | 0.87 / search | **0.57 / search** | ↓ 34% |
+| Fallback 尝试 | 0.87 / search | **0.57 / search** | ↓ 34% |
+| Fallback verified hits | 2（0.07 / 公司） | **0** | reserve 路径基本被 URL Selector 取代 |
+| Off-target rejections | 12.57 / 公司 | 20.97 / 公司 | ↑（更多页被扫 + 全文替换后 filter 更严） |
+| URL selector full-page | — | **71 次**（2.70 attempts / 公司） | 新能力 |
+| Full-page extract（evidence） | 4 | 1 | verify 复用 selector 全文，少重复 Extract |
+
+**解读：** sufficient 从 36.7% → 40% 是本轮最直观收益；verify 100% 说明 evidence 质量更干净。URL Selector 每家公司平均拉 ~2.4 页全文（71/30），primary batch 空跑和 fallback 依赖都明显下降——信息在 **search 阶段** 就进了 pipeline，而不是靠 reserve 碰运气。Evidence 总数下降但 sufficient 上升，符合「少而准」方向。
+
+**v3/v4 遗留现象（v5 部分缓解）：**
+
+- Off-target 仍高（v5 更高，因扫描面扩大）
+- Fallback 命中率问题 → v5 几乎不再靠 fallback 产出 verified
+- **结论更新：** URL Selector + Query Generator 对 **信息可得性** 有效；下一步可看 sufficient 子集 claim 质量、以及 off-target 是否需调 filter 阈值
 
 ---
 
-## 进行中 / 未 commit（截至 2026-09-20）
+## 进行中 / 未 commit（截至 2026-09-21）
 
-以下在 **阶段 4–7**，尚未 push：
+**已 push（`66d6c4f`）：** 阶段 5–7 + sufficient `reason`
+
+**本地未 push（阶段 8–10）：**
 
 ```
-src/components/constants.py          (new)
+src/components/constants.py
 src/components/tools.py
 src/components/evidence_verification.py
 src/components/nodes.py
@@ -244,8 +329,8 @@ src/llm/models.py
 src/prompts/system_prompts.py
 src/reporting/research_report.py
 src/schemas/research_schemas.py
-src/services/search_evidence_extractor.py
-test.ipynb
+src/services/query_generator.py    (new)
+src/services/url_selector.py         (new)
 ```
 
 ---
@@ -253,10 +338,10 @@ test.ipynb
 ## 已知问题 & 待做（讨论过、未实现）
 
 1. **Deterministic sufficiency** — requirement 拆 checklist，用 verified claims 规则匹配，不让 agent 主观拍板
-2. **搜索策略硬化** — query 强制公司名、`site:官网`、Tavily `include_domains`
-3. **Primary 空结果时 proactive full-page extract** — 不只等 ownership unclear
-4. **Planner / Executor 拆分** — 单独 LLM 管 focus + sufficient，agent 只写 query
-5. **Engine PR #2** — 未 merge；本地 dedupe 逻辑已覆盖部分意图，但未 1:1 对齐 PR
+2. **Query Generator 域名启发式** — prior URLs 目前纯 LLM 推断 `site:`，可加规则
+3. **Selector 用 search `raw_content`** — 对比 Tavily Extract，省 API / 降延迟（讨论过，未改）
+4. **Engine PR #2** — 未 merge；本地 dedupe 逻辑已覆盖部分意图，但未 1:1 对齐 PR
+5. **Sufficient 子集分析** — 不只看 overall rate，看 sufficient runs 的 tool calls 与 claim 质量
 
 ---
 
@@ -271,7 +356,8 @@ test.ipynb
 | `6497eea` | Off-target company filter（Engine PR #1） | merged |
 | `b4f48c5` | Eval script + insufficient runs 报告 | merged |
 | `3570f5e` | Skip duplicate sources（Engine PR #2） | **未 merge** |
-| 本地 | search_focus、Tavily 10、fallback、fact extract、模型升级 | **未 commit** |
+| `66d6c4f` | search_focus、Tavily 10、fallback、fact extract、mini、 sufficient reason | merged |
+| 本地 | URL Selector、research_search + Query Generator、verify 全文复用 | **未 commit** |
 
 ---
 

@@ -28,35 +28,34 @@ Poor alignment or evidence directly contradicts the requirement.
 """
 
 RESEARCH_AGENT_SYSTEM_PROMPT = """
-Research one company against one requirement. You have a web search budget of {max_search_calls} calls.
-Call web_search with two arguments on every search:
-- query: keyword query for the search engine
-- search_focus: one sentence describing the exact evidence gap this search should fill
+Research one company against one requirement. You have a research search budget of
+{max_search_calls} calls.
 
-Evidence extraction uses search_focus (not query) to decide which facts to pull from results.
-After each search, evidence is extracted and verified automatically from that search batch.
-Each tool result reports searches used and any new verified claims from that search.
+Your job is planning only:
+1. Review verified claims reported in tool results.
+2. Decide whether collected evidence is enough to evaluate the requirement.
+3. If not, choose the single most important next search_focus and call research_search.
 
-After every web_search, follow this process in order:
+Do NOT write search queries yourself. The research_search tool generates the retrieval
+query from your search_focus.
+
+After each research_search, follow this process in order:
 1. Combine the new verified claims with all verified claims from earlier searches.
 2. Decide whether that combined evidence is already enough to evaluate the requirement.
 3. If yes, stop searching immediately and return your final answer.
-4. If not, decide the most important missing search focus next.
-5. Call web_search again with that search_focus and a query aimed at that focus.
+4. If not, decide the most important missing search_focus next.
+5. Call research_search again with only that search_focus.
 
-Do not jump straight to a new query without steps 1-4.
-Example progression:
-- search_focus: whether the property has private meeting or event space
-  query: "<company name> meeting room event space"
-- no verified claims yet: keep the same search_focus, change query angle
-  query: "site:<official-domain> meeting room" or "<company name> ballroom conference"
-- after meeting-space existence is verified, next search_focus: capacity or size of the space
-  query: "<company name> meeting room capacity"
+Example search_focus progression:
+- whether the property has private meeting or event space
+- capacity or size of meeting/event space for 20-60 participants
+- catering or banquet services for group events
 
 Rules:
-- change search_focus only after the current focus is satisfied by verified claims, or a different gap becomes the priority
-- if a search adds no verified claims, the focus is not satisfied; you may retry the same search_focus with a different query
-- query is for retrieval only; search_focus drives what evidence is extracted
+- change search_focus only after the current focus is satisfied by verified claims,
+  or a different gap becomes the priority
+- if a search adds no verified claims, the focus is not satisfied; you may call
+  research_search again with the same search_focus (a new query will be generated)
 - base sufficiency only on verified claims reported across tool results
 - stop as soon as combined verified claims are enough to evaluate the requirement
 - do not treat 'not found' as evidence that the requirement is false
@@ -77,7 +76,7 @@ Your only task now is to call the ResearchResult tool once with exactly these fi
 
 Rules:
 - do NOT pass query or any other field
-- do NOT call web_search
+- do NOT call research_search
 - do NOT return evidence items; they were already collected during search
 - base your decision only on verified evidence already reported in tool results
 - if important information is still missing, set sufficient=false, list what is missing
@@ -90,8 +89,64 @@ Rules:
 
 RESEARCH_FINAL_HUMAN_REMINDER = (
     "Search budget is exhausted. Call the ResearchResult tool now with "
-    "`sufficient`, `additional_evidence_needed`, and `reason`. Do not pass `query`."
+    "`sufficient`, `additional_evidence_needed`, and `reason`."
 )
+
+QUERY_GENERATOR_SYSTEM_PROMPT = """
+You write one Tavily web search query for a B2B hotel research pipeline.
+
+You receive:
+- company name
+- requirement
+- search_focus (the evidence gap to fill — PRIMARY guide)
+- already verified claims
+- queries already used this run (must NOT repeat or lightly rephrase)
+- URLs already seen (use to infer official hotel domains for site: searches)
+
+Write a short keyword query (typically 4-12 words) that helps find pages containing
+facts for search_focus.
+
+Query rules:
+- ALWAYS include the target company name (or unmistakable short form) in the query
+- tailor keywords to search_focus type:
+  - existence → meeting room, event space, ballroom, MICE, banquet
+  - capacity → capacity, seats, guests, pax, sqm, floor plan, seating chart
+  - catering → catering, banquet, group dining, F&B, event menu
+- if prior queries found an official hotel domain, prefer a NEW angle using site:domain
+- if prior queries used broad OTAs, try official site, PDF, or MICE directory angles
+- do NOT repeat queries already used
+- do NOT write full sentences; use search-engine keywords
+- avoid generic city-only queries without the company name
+
+Return query and a brief rationale.
+"""
+
+URL_SELECTOR_SYSTEM_PROMPT = """
+You select one or two URLs from a Tavily search batch for full-page extraction.
+Each candidate includes url, title, and a short content snippet.
+Use search_focus as the primary guide for what evidence is missing.
+
+Pick pages most likely to contain detailed facts for search_focus — not generic homepages.
+For meeting/event/capacity/catering research, prefer pages that look like meetings,
+events, MICE, banquets, or downloadable venue specs.
+
+Source priority (higher = prefer for full-page extract):
+5 — Official meeting/event pages; official PDF/fact sheet/banquet kit; hotel group
+    official event portal
+4 — Official convention bureau / MICE directory; Cvent / Northstar / HotelPlanner;
+    Travel Weekly / BTN / Conference Hotel Group (third-party; note staleness risk)
+3 — Local event or wedding venue platforms (supplementary)
+2 — Booking.com / Agoda / Expedia (existence only); official hotel social posts
+1 — Reviews, blogs, videos (lead discovery only; avoid unless nothing else fits)
+
+Rules:
+- return only URLs that appear exactly in the provided candidate list
+- return 0 selections if no candidate is meaningfully better than snippet-only pages
+- return at most 2 selections
+- prefer higher-priority source types when several candidates could help
+- do not select URLs whose snippet already contains the specific facts search_focus needs
+- briefly explain each selection in reason
+"""
 
 SEARCH_BATCH_EVIDENCE_PROMPT = """
 Extract evidence from ONE search batch only. You will receive up to 5 search results,

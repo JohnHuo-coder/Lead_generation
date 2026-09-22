@@ -4,7 +4,9 @@ from dotenv import load_dotenv
 from langchain_openai import ChatOpenAI
 from schemas.research_schemas import (
     ExcerptDerivationResult,
+    QueryGeneratorResult,
     SearchBatchEvidenceResult,
+    UrlSelectorResult,
     VerifyResult,
 )
 from schemas.fit_scoring_schemas import FitScoreResult
@@ -23,6 +25,14 @@ llm = ChatOpenAI(model=RESEARCH_LLM_MODEL)
 structured_search_batch_evidence_llm = ChatOpenAI(
     model=RESEARCH_LLM_MODEL,
 ).with_structured_output(SearchBatchEvidenceResult)
+
+structured_url_selector_llm = ChatOpenAI(
+    model=RESEARCH_LLM_MODEL,
+).with_structured_output(UrlSelectorResult)
+
+structured_query_generator_llm = ChatOpenAI(
+    model=RESEARCH_LLM_MODEL,
+).with_structured_output(QueryGeneratorResult)
 
 structured_verification_llm = ChatOpenAI(
     model=RESEARCH_LLM_MODEL,

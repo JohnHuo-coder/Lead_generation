@@ -1,4 +1,4 @@
-from typing import Literal, TypedDict
+from typing import Literal, NotRequired, TypedDict
 
 from pydantic import BaseModel, Field
 
@@ -9,6 +9,7 @@ class SearchDocument(TypedDict):
     title: str
     url: str
     content: str
+    full_page: NotRequired[bool]
 
 
 class PipelineStats(TypedDict):
@@ -69,6 +70,32 @@ class SearchBatchEvidenceResult(BaseModel):
     evidence: list[Evidence] = Field(
         default_factory=list,
         description="Evidence extracted from the current search batch only.",
+    )
+
+
+class UrlSelectorChoice(BaseModel):
+    url: str = Field(
+        description="Exact URL from the provided search results to fetch in full."
+    )
+    reason: str = Field(
+        description="Why this page is likely to contain detailed evidence for search_focus."
+    )
+
+
+class UrlSelectorResult(BaseModel):
+    selections: list[UrlSelectorChoice] = Field(
+        default_factory=list,
+        max_length=2,
+        description="One or two URLs whose full page content should be extracted.",
+    )
+
+
+class QueryGeneratorResult(BaseModel):
+    query: str = Field(
+        description="Keyword query for Tavily web search, typically 4-12 words."
+    )
+    rationale: str = Field(
+        description="Brief explanation of why this query angle fits search_focus."
     )
 
 
