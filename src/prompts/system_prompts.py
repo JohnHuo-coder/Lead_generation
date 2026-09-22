@@ -57,15 +57,22 @@ Rules:
 - if a search adds no verified claims, the focus is not satisfied; you may call
   research_search again with the same search_focus (a new query will be generated)
 - base sufficiency only on verified claims reported across tool results
-- set sufficient=true only when the combined verified claims cover every required component:
-  the property's own private meeting or event space, explicit capacity or size showing
-  suitability for 20-60 participants, and catering or banquet service for group events
-- evidence for only one or two of these components is insufficient
-- a guest-conduct or house-rules statement, such as parties not being allowed, is never
-  sufficient on its own and must not be treated as evidence that meeting/event space or
-  catering does or does not exist
+- sufficient=true has exactly two valid paths:
+  - POSITIVE: verified claims cover every required component — the property's own private
+    meeting or event space, explicit capacity or size showing suitability for the required
+    headcount, and catering or banquet service for group events
+  - NEGATIVE: a verified claim states the property has no meeting or event space of its own,
+    or that its space cannot host group events of the required size
+- evidence covering only one or two components, without such a negative claim, is insufficient
+- the NEGATIVE path requires a source that speaks about the property's own facilities: its
+  official site or materials, or a venue/MICE directory entry for the property
+- a guest-conduct or house-rules statement — parties not allowed, pets, smoking, quiet hours,
+  check-in times — never satisfies either path, and is not evidence that meeting/event space
+  or catering does or does not exist. Such policies govern guest behaviour in guest rooms and
+  are routinely published by properties that do run banquet and meeting business.
 - stop as soon as combined verified claims are enough to evaluate the requirement
-- do not treat 'not found' as evidence that the requirement is false
+- do not treat 'not found' as evidence that the requirement is false; searches returning
+  nothing is not a negative claim
 - do not decide whether the company qualifies
 - in your final response, return sufficient, additional_evidence_needed, and reason
 - when sufficient=true, reason must briefly explain which verified claims cover the
@@ -91,12 +98,16 @@ Rules:
 - if the collected evidence is enough to evaluate the requirement, set sufficient=true,
   return an empty additional_evidence_needed list, and explain in reason which verified
   claims cover the requirement and why that is enough to evaluate it
-- sufficient=true requires verified claims covering every required component: the property's
-  own private meeting or event space, explicit capacity or size showing suitability for 20-60
-  participants, and catering or banquet service for group events. Evidence for only one or two
-  components is insufficient. A guest-conduct or house-rules statement, such as parties not
-  being allowed, is never sufficient on its own and must not be treated as evidence that
-  meeting/event space or catering does or does not exist.
+- sufficient=true has exactly two valid paths. POSITIVE: verified claims cover every required
+  component — the property's own private meeting or event space, explicit capacity or size
+  showing suitability for the required headcount, and catering or banquet service for group
+  events. NEGATIVE: a verified claim, sourced from the property's official site or materials or
+  a venue/MICE directory entry for the property, states the property has no meeting or event
+  space of its own or cannot host group events of the required size. Evidence covering only one
+  or two components, without such a negative claim, is insufficient.
+- a guest-conduct or house-rules statement — parties not allowed, pets, smoking, quiet hours,
+  check-in times — never satisfies either path, and is not evidence that meeting/event space or
+  catering does or does not exist.
 - do not decide whether the company qualifies
 """
 
@@ -185,7 +196,10 @@ When search_focus asks for capacity (e.g. 20-60 attendees, max capacity, room si
 
 When search_focus asks for existence, do not extract capacity figures unless they also prove existence.
 
-Include claims that support or contradict the search_focus.
+Include claims that support or contradict the search_focus. A source explicitly stating the
+property has no meeting/event space, or none that fits the required size, is a valid claim when
+it speaks about the property's own facilities — but only when the source says so; a page that
+simply does not mention meeting space is not such a statement.
 If the batch has no facts that answer the search_focus, return an empty evidence list.
 Ignore retrieval keywords in the search query when they differ from search_focus.
 Do NOT extract generic marketing copy, amenity lists, or AV/catering/setup blurbs unless they
