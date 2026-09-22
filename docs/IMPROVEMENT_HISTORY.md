@@ -1,7 +1,7 @@
 # Research Pipeline 改进历史
 
 记录每次 batch test 前后改了什么，方便对比报告、回溯决策。  
-**当前 main 已 push 到：** `028072b` · 工作区干净，阶段 8–11 全部已合入。
+**当前 main 已 push 到：** `71bad5b` · 工作区干净，阶段 8–12 全部已合入。
 
 ---
 
@@ -311,6 +311,46 @@ commit：`3570f5e`（**只在远端分支，未进 main**）
 
 ---
 
+## 阶段 12：删掉 reserve fallback 重试 — `71bad5b` ✅ merged（9/22）
+
+**来源：** 对应 Engine PR `issues-agent/83052ddf`（`43c92ac`）的问题诊断，但**未采用该 PR 的实现**（见下）。
+
+**动机（v5 数据）：** primary 5 条抽不到 evidence 时，会拿同一个 `search_focus` + 同样的 prior claims
+对第 6–10 条再跑一次 `_extract_and_verify_batch` —— 相当于**重复一次刚失败的 pass**，只是换成同一结果页
+的低排名尾部。v5 计数器：`fallback_extract_attempts` **17**、`fallback_verified_hits` **0**
+（13 个不同 run，0 命中），约 **43k** 抽取 token 白烧；而同期 primary 平均产出 1.18 条 evidence，
+且约 60% 的 run 最终仍是 `sufficient=false`。
+
+**改动：**
+
+1. 删掉 fallback 重试与 reserve 桶；`_split_search_batches` → **`_take_extraction_batch`**（只取前
+   `MAX_RESULTS_PER_SEARCH`=5 条，尾部**直接丢弃、不抽取**）
+2. `_collect_search_batches` → `_collect_search_batch`（单批次返回）
+3. **Tavily 仍拉 10 条**（`TAVILY_MAX_RESULTS` 不变），让 URL Selector 能在整页候选里挑全文页 ——
+   这是尾部结果保留的唯一用途
+4. 删 `fallback_extract_attempts` / `fallback_verified_hits`（state / nodes / report / 命中率行）
+5. **保留** `empty_evidence_tool_calls`，但**重新定义**为「本次 search 有文档但 0 条 verified」，
+   不再与 fallback 耦合（原来只在有 reserve 可重试时才计数，漏记了一部分空结果）
+
+**文件：** `tools.py`, `state.py`, `nodes.py`, `research_report.py`
+
+**为何不直接合 PR `43c92ac`：**
+
+- 该 PR 基于 `66d6c4f`（阶段 8–10 之前），与 main 冲突 5 个文件；其重写的 `_collect_search_batches`
+  在 main 已拆成 `_filter_eligible_results` → `_apply_url_selector_full_extracts` →
+  `_prioritize_selected_urls` → `_split_search_batches` 四步
+- 该 PR 并非「丢弃尾部」，而是把 **10 条合并成一个批次全部抽取**，尾部仍进 context；
+  且删掉了 `MAX_RESULTS_PER_SEARCH`（`_split_search_batches` 仍需）、丢了
+  `if url not in full_page_urls` 守卫（会把 full_page 文档按 snippet 内容登记进去重表）
+
+**注意：** 尾部结果不再进 `search_documents`，因此不写入 state 去重表 —— 后续 search 若再命中同一 URL
+仍视为 eligible。这是有意的：它没被抽取过，重新考虑是正确行为。
+
+**待验证：** v6 观察 `empty_evidence_tool_calls` 与 sufficient rate —— 预期 token/延迟下降，
+sufficient 基本不变（因为原 fallback 命中率为 0）。
+
+---
+
 ## Batch 测试记录（30 家 Bangkok 酒店）
 
 Requirement（固定）：
@@ -321,7 +361,7 @@ Requirement（固定）：
 | v3（nano） | gpt-5-nano | **36.7%** | 97.0% | 100 | 3.3 | 阶段 5–6 本地改动 |
 | v4（mini） | gpt-5-mini | **33.3%** | 95.1% | 122 | 3.5 | 阶段 7；evidence 更多但 sufficient 未升 |
 | **v5（mini）** | gpt-5-mini | **40.0%** | 100.0% | 78 | 3.5 | 阶段 8–10；`model_gpt-5-mini_research_report_v5.html`（2026-09-21） |
-| v6（mini） | gpt-5-mini | *未跑* | — | — | — | 阶段 11 后待跑；验证 house-rules 误判是否消除 |
+| v6（mini） | gpt-5-mini | *未跑* | — | — | — | 阶段 11–12 后待跑；验证 house-rules 误判消除 + fallback 删除影响 |
 
 > **注：** 阶段 10 改完后跑 **test v5**（2026-09-21 20:58 UTC）。
 
@@ -352,9 +392,13 @@ Requirement（固定）：
 
 ## 进行中（截至 2026-09-22）
 
-**已 push：** 阶段 5–7 + `reason`（`66d6c4f`）、阶段 8–10（`63b9fe5`）、阶段 11（`028072b`）
+**已 push：** 阶段 5–7 + `reason`（`66d6c4f`）、阶段 8–10（`63b9fe5`）、阶段 11（`028072b`）、
+阶段 12（`71bad5b`）
 
-**工作区干净**，无未 commit 改动。下一步：跑 **v6** 验证阶段 11。
+**工作区干净**，无未 commit 改动。下一步：跑 **v6** 验证阶段 11–12。
+
+**未合的远端分支：** `issues-agent/52581ac4`（`3570f5e`, skip duplicate sources / 旧 PR #2）、
+`issues-agent/83052ddf`（`43c92ac`, reserve retry —— 已由阶段 12 以不同实现覆盖）
 
 ---
 
@@ -385,6 +429,8 @@ Requirement（固定）：
 | `63b9fe5` | URL Selector、research_search + Query Generator、verify 全文复用 | merged |
 | `e4c74ad` | sufficient 三要素齐全 + 排除 OTA house rules（Engine PR） | merged |
 | `028072b` | Merge `issues-agent/525d26e4` → main | merged |
+| `43c92ac` | remove duplicate reserve extraction retry（Engine PR） | **未 merge**（改用 `71bad5b` 重写） |
+| `71bad5b` | 删 reserve fallback 重试；只抽前 5 条 | merged |
 
 ---
 
