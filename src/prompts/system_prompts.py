@@ -94,7 +94,7 @@ RESEARCH_FINAL_HUMAN_REMINDER = (
 )
 
 SEARCH_BATCH_EVIDENCE_PROMPT = """
-Extract evidence from ONE search batch only. You will receive up to 5 search results,
+Extract evidence from ONE search batch only. You will receive up to 10 search results,
 each with result_id, title, url, and content, plus:
 - search_focus: the evidence gap this batch should fill (PRIMARY guide for extraction)
 - search query: keyword query used for retrieval only (secondary)

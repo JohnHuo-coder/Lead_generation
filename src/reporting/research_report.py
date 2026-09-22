@@ -28,9 +28,6 @@ PIPELINE_STAT_FIELDS = (
     "off_target_company_rejections",
     "duplicate_search_result_skips",
     "duplicate_claim_skips",
-    "empty_evidence_tool_calls",
-    "fallback_extract_attempts",
-    "fallback_verified_hits",
     "excerpt_derivation_checks",
     "evidence_full_snippet_verifications",
     "evidence_full_page_extracts",
@@ -41,9 +38,6 @@ PIPELINE_STAT_LABELS = {
     "off_target_company_rejections": "Off-target company rejections (search documents)",
     "duplicate_search_result_skips": "Duplicate search result skips (search)",
     "duplicate_claim_skips": "Duplicate claim skips (evidence)",
-    "empty_evidence_tool_calls": "Empty-evidence tool calls (primary batch)",
-    "fallback_extract_attempts": "Fallback extract attempts (reserve batch)",
-    "fallback_verified_hits": "Fallback verified hits (reserve batch)",
     "excerpt_derivation_checks": "Excerpt derivation LLM checks (excerpt)",
     "evidence_full_snippet_verifications": "Full snippet verifications (evidence)",
     "evidence_full_page_extracts": "Full-page extracts (evidence)",
@@ -350,14 +344,6 @@ def format_batch_summary(summary: dict[str, Any]) -> str:
             average = pipeline_stats_averages.get(field)
             avg_text = f"{average:.2f}" if average is not None else "n/a"
             lines.append(f"  - {PIPELINE_STAT_LABELS[field]}: {avg_text}")
-
-    fallback_attempts = pipeline_stats.get("fallback_extract_attempts", 0)
-    if fallback_attempts:
-        fallback_hits = pipeline_stats.get("fallback_verified_hits", 0)
-        lines.append(
-            f"Fallback verified hit rate: {fallback_hits / fallback_attempts:.1%} "
-            f"({fallback_hits}/{fallback_attempts})"
-        )
 
     if summary["failure_reason_counts"]:
         lines.append("Failure reason distribution:")
