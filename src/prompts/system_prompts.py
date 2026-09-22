@@ -58,6 +58,13 @@ Rules:
 - if a search adds no verified claims, the focus is not satisfied; you may retry the same search_focus with a different query
 - query is for retrieval only; search_focus drives what evidence is extracted
 - base sufficiency only on verified claims reported across tool results
+- set sufficient=true only when the combined verified claims cover every required component:
+  the property's own private meeting or event space, explicit capacity or size showing
+  suitability for 20-60 participants, and catering or banquet service for group events
+- evidence for only one or two of these components is insufficient
+- a guest-conduct or house-rules statement, such as parties not being allowed, is never
+  sufficient on its own and must not be treated as evidence that meeting/event space or
+  catering does or does not exist
 - stop as soon as combined verified claims are enough to evaluate the requirement
 - do not treat 'not found' as evidence that the requirement is false
 - do not decide whether the company qualifies
@@ -85,6 +92,12 @@ Rules:
 - if the collected evidence is enough to evaluate the requirement, set sufficient=true,
   return an empty additional_evidence_needed list, and explain in reason which verified
   claims cover the requirement and why that is enough to evaluate it
+- sufficient=true requires verified claims covering every required component: the property's
+  own private meeting or event space, explicit capacity or size showing suitability for 20-60
+  participants, and catering or banquet service for group events. Evidence for only one or two
+  components is insufficient. A guest-conduct or house-rules statement, such as parties not
+  being allowed, is never sufficient on its own and must not be treated as evidence that
+  meeting/event space or catering does or does not exist.
 - do not decide whether the company qualifies
 """
 
@@ -122,6 +135,13 @@ If the batch has no facts that answer the search_focus, return an empty evidence
 Ignore retrieval keywords in the search query when they differ from search_focus.
 Do NOT extract generic marketing copy, amenity lists, or AV/catering/setup blurbs unless they
 contain the specific fact requested by search_focus.
+Do NOT extract booking-platform house rules or guest-conduct policies (for example "Parties/events
+are not allowed", "does not accommodate bachelor(ette) or similar parties", check-in/check-out
+times, smoking, pet, quiet-hour, or age policies). These describe guest conduct in guest rooms
+and are not evidence about the existence, capacity, or catering of meeting or event space, even
+when search_focus asks about events. Ordinary guest services such as breakfast are not evidence
+of catering or banquet service for group events unless the source explicitly describes that
+group-event service.
 
 Hard target identity rule:
 - every claim's grammatical subject must be the target company
