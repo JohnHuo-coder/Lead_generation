@@ -212,35 +212,27 @@ def _prioritize_selected_urls(
     return [*selected, *others]
 
 
-def _split_search_batches(
+def _take_extraction_batch(
     eligible_documents: list[SearchDocument],
     *,
     tool_call_id: str,
     known_documents: dict[str, str],
     full_page_urls: set[str],
-) -> tuple[dict[str, SearchDocument], dict[str, SearchDocument]]:
-    primary_documents: dict[str, SearchDocument] = {}
-    reserve_documents: dict[str, SearchDocument] = {}
+) -> dict[str, SearchDocument]:
+    """Keep the top-ranked eligible documents; lower-ranked ones are dropped unextracted."""
+    batch_documents: dict[str, SearchDocument] = {}
 
-    for document in eligible_documents:
+    for document in eligible_documents[:MAX_RESULTS_PER_SEARCH]:
         url = document["url"]
-        content = document["content"]
         if url not in full_page_urls:
-            known_documents[url] = content
+            known_documents[url] = document["content"]
+        result_id = f"{tool_call_id}_{len(batch_documents)}"
+        batch_documents[result_id] = document
 
-        if len(primary_documents) < MAX_RESULTS_PER_SEARCH:
-            result_id = f"{tool_call_id}_{len(primary_documents)}"
-            primary_documents[result_id] = document
-        elif len(reserve_documents) < MAX_RESULTS_PER_SEARCH:
-            result_id = f"{tool_call_id}_r{len(reserve_documents)}"
-            reserve_documents[result_id] = document
-        else:
-            break
-
-    return primary_documents, reserve_documents
+    return batch_documents
 
 
-def _collect_search_batches(
+def _collect_search_batch(
     results: list[dict],
     *,
     query: str,
@@ -250,15 +242,7 @@ def _collect_search_batches(
     known_documents: dict[str, str],
     full_page_urls: set[str],
     tool_call_id: str,
-) -> tuple[
-    dict[str, SearchDocument],
-    dict[str, SearchDocument],
-    int,
-    int,
-    int,
-    int,
-    int,
-]:
+) -> tuple[dict[str, SearchDocument], int, int, int, int, int]:
     eligible, skipped_duplicate_results, off_target_company_rejections = _filter_eligible_results(
         results,
         query=query,
@@ -289,7 +273,7 @@ def _collect_search_batches(
     }
     eligible = _prioritize_selected_urls(eligible, selected_urls)
 
-    primary_documents, reserve_documents = _split_search_batches(
+    batch_documents = _take_extraction_batch(
         eligible,
         tool_call_id=tool_call_id,
         known_documents=known_documents,
@@ -297,8 +281,7 @@ def _collect_search_batches(
     )
 
     return (
-        primary_documents,
-        reserve_documents,
+        batch_documents,
         skipped_duplicate_results,
         off_target_company_rejections,
         url_selector_extract_attempts,
@@ -378,14 +361,13 @@ def research_search(
     response = tavily_client.search(query, max_results=TAVILY_MAX_RESULTS)
     known_documents, full_page_urls = _build_known_document_indexes(prior_search_documents)
     (
-        primary_documents,
-        reserve_documents,
+        search_documents,
         skipped_duplicate_results,
         off_target_company_rejections,
         url_selector_extract_attempts,
         url_selector_full_page_extracts,
         url_selector_extract_failures,
-    ) = _collect_search_batches(
+    ) = _collect_search_batch(
         response["results"],
         query=query,
         search_focus=search_focus,
@@ -396,11 +378,10 @@ def research_search(
         tool_call_id=runtime.tool_call_id,
     )
 
-    search_documents = dict(primary_documents)
     all_search_documents = {**prior_search_documents, **search_documents}
 
-    primary_merged, result_id_match_failures, duplicate_claim_skips = _extract_and_verify_batch(
-        primary_documents,
+    merged_verification, result_id_match_failures, duplicate_claim_skips = _extract_and_verify_batch(
+        search_documents,
         company=company,
         collaboration_intent=runtime.state.get("collaboration_intent", ""),
         requirement=requirement,
@@ -410,56 +391,8 @@ def research_search(
         all_search_documents=all_search_documents,
     )
 
-    empty_evidence_tool_calls = 0
-    fallback_extract_attempts = 0
-    fallback_verified_hits = 0
-
-    primary_verified = primary_merged.get("verified_evidence") or []
-    merged_verification = primary_merged
-
-    if primary_documents and not primary_verified and reserve_documents:
-        empty_evidence_tool_calls = 1
-        fallback_extract_attempts = 1
-
-        verified_after_primary = [
-            *prior_verified,
-            *primary_verified,
-        ]
-        search_documents = {**primary_documents, **reserve_documents}
-        all_search_documents = {**prior_search_documents, **search_documents}
-
-        fallback_merged, fallback_match_failures, fallback_claim_skips = _extract_and_verify_batch(
-            reserve_documents,
-            company=company,
-            collaboration_intent=runtime.state.get("collaboration_intent", ""),
-            requirement=requirement,
-            search_query=query,
-            search_focus=search_focus,
-            prior_verified_evidence=verified_after_primary,
-            all_search_documents=all_search_documents,
-        )
-        result_id_match_failures += fallback_match_failures
-        duplicate_claim_skips += fallback_claim_skips
-
-        for key in (
-            "verified_evidence",
-            "failed_evidence_checks",
-            "excerpt_derivation_checks",
-            "evidence_full_snippet_verifications",
-            "evidence_full_page_extracts",
-        ):
-            values = fallback_merged.get(key)
-            if not values:
-                continue
-            if key in {"verified_evidence", "failed_evidence_checks"}:
-                merged_verification.setdefault(key, []).extend(values)
-            else:
-                merged_verification[key] = merged_verification.get(key, 0) + values
-
-        if fallback_merged.get("verified_evidence"):
-            fallback_verified_hits = 1
-
     verified_batch = merged_verification.get("verified_evidence") or []
+    empty_evidence_tool_calls = 1 if search_documents and not verified_batch else 0
 
     searches_used = runtime.state.get("tool_call_count", 0) + 1
     result_string = _format_tool_message_for_agent(
@@ -476,8 +409,6 @@ def research_search(
         "duplicate_search_result_skips": skipped_duplicate_results,
         "duplicate_claim_skips": duplicate_claim_skips,
         "empty_evidence_tool_calls": empty_evidence_tool_calls,
-        "fallback_extract_attempts": fallback_extract_attempts,
-        "fallback_verified_hits": fallback_verified_hits,
         "url_selector_extract_attempts": url_selector_extract_attempts,
         "url_selector_full_page_extracts": url_selector_full_page_extracts,
         "url_selector_extract_failures": url_selector_extract_failures,
