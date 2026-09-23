@@ -12,6 +12,16 @@ class SearchDocument(TypedDict):
     full_page: NotRequired[bool]
 
 
+class OffTargetRejection(TypedDict):
+    """A search result dropped because it never mentions the target company."""
+
+    query: str
+    search_focus: str
+    title: str
+    url: str
+    missing_tokens: list[str]
+
+
 class PipelineStats(TypedDict):
     batch_result_id_match_failures: int
     off_target_company_rejections: int

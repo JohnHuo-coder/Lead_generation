@@ -68,11 +68,8 @@ def _company_tokens(company: str) -> set[str]:
     }
 
 
-def _document_mentions_company(
-    company_tokens: set[str],
-    document: SearchDocument,
-) -> bool:
-    document_tokens = set(
+def _document_tokens(document: SearchDocument) -> set[str]:
+    return set(
         re.findall(
             r"[\w]+",
             " ".join(
@@ -80,11 +77,25 @@ def _document_mentions_company(
             ).casefold(),
         )
     )
-    return bool(company_tokens) and company_tokens <= document_tokens
+
+
+def _document_mentions_company(
+    company_tokens: set[str],
+    document: SearchDocument,
+) -> bool:
+    return bool(company_tokens) and company_tokens <= _document_tokens(document)
 
 
 def document_mentions_company(document: SearchDocument, company: str) -> bool:
     return _document_mentions_company(_company_tokens(company), document)
+
+
+def missing_company_tokens(document: SearchDocument, company: str) -> list[str]:
+    """Company-name tokens the document never mentions, i.e. why it was off-target."""
+    company_tokens = _company_tokens(company)
+    if not company_tokens:
+        return []
+    return sorted(company_tokens - _document_tokens(document))
 
 
 def _focus_requests_capacity(search_focus: str) -> bool:

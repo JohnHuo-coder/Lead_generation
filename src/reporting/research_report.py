@@ -170,6 +170,9 @@ def build_run_report(state: dict[str, Any]) -> dict[str, Any]:
         ],
         "failure_reason_counts": dict(failure_reason_counts),
         "check_stage_counts": dict(check_stage_counts),
+        "off_target_rejections": [
+            dict(rejection) for rejection in state.get("off_target_rejections") or []
+        ],
         "pipeline_stats": _extract_pipeline_stats(state),
     }
 
@@ -494,6 +497,43 @@ def _render_source_content_block(content: str, *, label: str = "Source content")
     )
 
 
+def _render_off_target_rejections(rejections: list[dict[str, Any]]) -> str:
+    """Group dropped results by the query that returned them, so a query that lost
+    every result is obvious when labelling query-generator failures."""
+    if not rejections:
+        return "<p class='muted'>No off-target rejections.</p>"
+
+    by_query: dict[tuple[str, str], list[dict[str, Any]]] = {}
+    for rejection in rejections:
+        key = (rejection.get("query") or "", rejection.get("search_focus") or "")
+        by_query.setdefault(key, []).append(rejection)
+
+    blocks = []
+    for (query, search_focus), items in by_query.items():
+        rows = "".join(
+            (
+                "<tr>"
+                f"<td><a href='{_escape(item.get('url'))}' target='_blank' rel='noopener noreferrer'>"
+                f"{_escape(item.get('url'))}</a></td>"
+                f"<td>{_escape(item.get('title'))}</td>"
+                f"<td><code>{_escape(', '.join(item.get('missing_tokens') or []))}</code></td>"
+                "</tr>"
+            )
+            for item in items
+        )
+        blocks.append(
+            "<div class='card'>"
+            f"<div><strong>Search focus:</strong> {_escape(search_focus)}</div>"
+            f"<div><strong>Query:</strong> <code>{_escape(query)}</code></div>"
+            f"<div><strong>Dropped:</strong> {len(items)}</div>"
+            "<table class='reject-table'>"
+            "<thead><tr><th>URL</th><th>Title</th><th>Missing tokens</th></tr></thead>"
+            f"<tbody>{rows}</tbody></table>"
+            "</div>"
+        )
+    return "".join(blocks)
+
+
 def _render_evidence_card(
     evidence: dict[str, Any],
     *,
@@ -600,6 +640,8 @@ def _render_run_report_html(report: dict[str, Any]) -> str:
   {verified_items}
   <h3>Failed Evidence Checks</h3>
   {failed_items}
+  <h3>Off-target Rejections ({len(report.get('off_target_rejections') or [])})</h3>
+  {_render_off_target_rejections(report.get('off_target_rejections') or [])}
 </section>
 """
 
@@ -718,6 +760,12 @@ def render_batch_summary_html(summary: dict[str, Any], *, title: str = "Research
     .card.success {{ border-left: 4px solid var(--success); }}
     .card.failure {{ border-left: 4px solid var(--failure); }}
     .card.candidate {{ border-left: 4px solid #2563eb; }}
+    table.reject-table {{
+      margin: 10px 0 0;
+      font-size: 13px;
+      table-layout: fixed;
+    }}
+    table.reject-table td {{ word-break: break-all; }}
     .badge-yes {{ color: var(--success); }}
     .badge-no {{ color: var(--failure); }}
     .badge-unknown {{ color: var(--unknown); }}

@@ -2,7 +2,12 @@ from typing import Annotated, TypedDict
 from operator import add, or_
 from langchain.agents import AgentState
 
-from schemas.research_schemas import Evidence, EvidenceCheckFailure, SearchDocument
+from schemas.research_schemas import (
+    Evidence,
+    EvidenceCheckFailure,
+    OffTargetRejection,
+    SearchDocument,
+)
 
 class ResearchAgentState(AgentState):
     tool_call_count: Annotated[int, add]
@@ -14,6 +19,7 @@ class ResearchAgentState(AgentState):
     failed_evidence_checks: Annotated[list[EvidenceCheckFailure], add]
     batch_result_id_match_failures: Annotated[int, add]
     off_target_company_rejections: Annotated[int, add]
+    off_target_rejections: Annotated[list[OffTargetRejection], add]
     duplicate_search_result_skips: Annotated[int, add]
     duplicate_claim_skips: Annotated[int, add]
     empty_evidence_tool_calls: Annotated[int, add]
@@ -42,6 +48,7 @@ class ResearchState(TypedDict):
 
     batch_result_id_match_failures: Annotated[int, add]
     off_target_company_rejections: Annotated[int, add]
+    off_target_rejections: Annotated[list[OffTargetRejection], add]
     duplicate_search_result_skips: Annotated[int, add]
     duplicate_claim_skips: Annotated[int, add]
     empty_evidence_tool_calls: Annotated[int, add]

@@ -11,10 +11,11 @@ from components.constants import (
 )
 from components.evidence_verification import merge_verification_updates, verify_evidence_item
 from components.state import ResearchAgentState
-from schemas.research_schemas import SearchDocument
+from schemas.research_schemas import OffTargetRejection, SearchDocument
 from services.search_evidence_extractor import (
     document_mentions_company,
     extract_evidence_from_search_batch,
+    missing_company_tokens,
 )
 from services.tavily_extract import extract_page_content
 from services.query_generator import generate_search_query
@@ -106,10 +107,10 @@ def _filter_eligible_results(
     company: str,
     known_documents: dict[str, str],
     full_page_urls: set[str],
-) -> tuple[list[SearchDocument], int, int]:
+) -> tuple[list[SearchDocument], int, list[OffTargetRejection]]:
     eligible: list[SearchDocument] = []
     skipped_duplicate_results = 0
-    off_target_company_rejections = 0
+    off_target_rejections: list[OffTargetRejection] = []
 
     for item in results:
         url = item["url"]
@@ -125,12 +126,18 @@ def _filter_eligible_results(
 
         document = _document_from_result(item, query=query, search_focus=search_focus)
         if not document_mentions_company(document, company):
-            off_target_company_rejections += 1
+            off_target_rejections.append({
+                "query": query,
+                "search_focus": search_focus,
+                "title": document["title"],
+                "url": url,
+                "missing_tokens": missing_company_tokens(document, company),
+            })
             continue
 
         eligible.append(document)
 
-    return eligible, skipped_duplicate_results, off_target_company_rejections
+    return eligible, skipped_duplicate_results, off_target_rejections
 
 
 def _apply_url_selector_full_extracts(
@@ -242,8 +249,15 @@ def _collect_search_batch(
     known_documents: dict[str, str],
     full_page_urls: set[str],
     tool_call_id: str,
-) -> tuple[dict[str, SearchDocument], int, int, int, int, int]:
-    eligible, skipped_duplicate_results, off_target_company_rejections = _filter_eligible_results(
+) -> tuple[
+    dict[str, SearchDocument],
+    int,
+    list[OffTargetRejection],
+    int,
+    int,
+    int,
+]:
+    eligible, skipped_duplicate_results, off_target_rejections = _filter_eligible_results(
         results,
         query=query,
         search_focus=search_focus,
@@ -283,7 +297,7 @@ def _collect_search_batch(
     return (
         batch_documents,
         skipped_duplicate_results,
-        off_target_company_rejections,
+        off_target_rejections,
         url_selector_extract_attempts,
         url_selector_full_page_extracts,
         url_selector_extract_failures,
@@ -363,7 +377,7 @@ def research_search(
     (
         search_documents,
         skipped_duplicate_results,
-        off_target_company_rejections,
+        off_target_rejections,
         url_selector_extract_attempts,
         url_selector_full_page_extracts,
         url_selector_extract_failures,
@@ -405,7 +419,8 @@ def research_search(
         "search_queries_used": [query] if query else [],
         "search_documents": search_documents,
         "batch_result_id_match_failures": result_id_match_failures,
-        "off_target_company_rejections": off_target_company_rejections,
+        "off_target_company_rejections": len(off_target_rejections),
+        "off_target_rejections": off_target_rejections,
         "duplicate_search_result_skips": skipped_duplicate_results,
         "duplicate_claim_skips": duplicate_claim_skips,
         "empty_evidence_tool_calls": empty_evidence_tool_calls,
