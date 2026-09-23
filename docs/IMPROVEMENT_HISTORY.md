@@ -1,7 +1,7 @@
 # Research Pipeline 改进历史
 
 记录每次 batch test 前后改了什么，方便对比报告、回溯决策。  
-**当前 main 已 push 到：** `a297567` · 工作区干净，阶段 8–13 全部已合入。
+**当前 main 已 push 到：** `3565ad4` · 工作区干净，阶段 8–14 全部已合入。
 
 ---
 
@@ -415,6 +415,63 @@ insufficient: 18 runs, 72 次搜索, 平均 4.00  ← 18/18 全部烧满预算
 
 ---
 
+## 阶段 14：记录 off-target 被拒结果 — `3565ad4` ✅ merged（9/23）
+
+**动机：** 为 query generator 的 prompt eval 做准备。gold negative 的判据是
+「前 10 条召回里确实没有承载事实的页面」，但 `_filter_eligible_results` 把被拒结果
+**直接丢弃、只留计数**，导致全拒的搜索在 trace 里**零 URL 可看**，判据无法执行。
+
+**v5 实例（Le Fenix Sukhumvit Hotel，0 evidence / insufficient）：**
+
+| # | query | off-target 拒 | 留下 | verified |
+|---|---|---:|---:|---:|
+| 1 | `... meeting rooms capacity pax 20 60 catering banquet` | **10/10** | 0 | 0 |
+| 2 | `... meeting room floorplan seating capacity banquet catering` | **10/10** | 0 | 0 |
+| 3 | `... event brochure banquet menu meeting packages` | 2 | 8 | 0 |
+| 4 | `... site:le-fenix-sukhumvit.bangkokhotel24.com ...` | **10/10** | 0 | 0 |
+
+4 次里 3 次全拒 → 无法判断是 query 没召回，还是好页面被过滤器误杀。
+（该酒店**确实有**会议宴会设施：Wego / trip.com 泰文页 / HECT 均有记载，
+`failed_evidence_checks=0` 说明抽取阶段无产出，留下的 8 页 7 个不含 meeting 字样。）
+
+**改动：**
+
+- `missing_company_tokens()` —— 返回文档缺失的公司名 token
+- `OffTargetRejection` schema：`query` / `search_focus` / `title` / `url` / `missing_tokens`
+- state 新增 `off_target_rejections`（list, add）；`off_target_company_rejections` 改为取 `len()`
+- 报告新增 **Off-target Rejections** 区块，**按 query 分组**，全拒的搜索一眼可见
+- **不存 content**，避免 state / 报告膨胀；也不进 ToolMessage，不占 agent context
+
+**文件：** `search_evidence_extractor.py`, `research_schemas.py`, `tools.py`, `state.py`,
+`nodes.py`, `research_report.py`
+
+### 顺带暴露的过滤器 bug（**本次未修**）
+
+`_company_tokens` 剔除 `bangkok/hotel/hotels/sukhumvit/the` 后，要求剩余 token **全部命中**：
+
+| 公司 | 必须全中的 token |
+|---|---|
+| iCheck inn Residences Sukhumvit Soi 2 | `2, icheck, inn, residences, soi` |
+| The Quarter On Nut by UHG | `by, nut, on, quarter, uhg` |
+| HOP INN Bangkok Onnut Station | `hop, inn, onnut, station` |
+| THEE Bangkok by TH District | `by, district, th, thee` |
+| Ramada by Wyndham Bangkok Sukhumvit 11 | `11, by, ramada, wyndham` |
+
+16 家里 **8 家需 4–5 个 token 全中**，含 `by` / `th` / `on` / `2` 等功能词与碎片。
+实测：HOP INN **官网** `hopinnhotel.com/onnut`（标题 "Hop Inn Bangkok Onnut"）
+因缺 `station` **被判 off-target**。
+
+v5 的 8 家 0-evidence 里，HOP INN、The Quarter On Nut by UHG、iCheck inn Residences
+正是最脆的三个名字 —— 它们的 0-evidence 很可能**不是 query 的问题**。
+
+**故意不修**：一次只动一个变量。先用本次日志跑一批量化误杀率，再决定过滤器改法；
+否则 gold 标签与过滤器行为同时变，无法归因。
+
+> 这也修正了阶段 8 的推测：v5 off-target 20.97/公司**未必**是「扫描面扩大」，
+> 更可能是**公司名越长越容易被误杀**。
+
+---
+
 ## Batch 测试记录（30 家 Bangkok 酒店）
 
 Requirement（固定）：
@@ -468,13 +525,17 @@ Requirement（固定）：
 
 ## 已知问题 & 待做（讨论过、未实现）
 
-1. **Deterministic sufficiency** — requirement 拆 checklist，用 verified claims 规则匹配，不让 agent 主观拍板
-2. **NEGATIVE 路径来源校验无代码约束** — 目前靠 prompt 让 LLM 自判「是否官网/MICE 目录」，
+1. **off-target 过滤器过严**（阶段 14 已量化，待修）— 要求公司名 token 全中，官网都会被误杀。
+   候选改法：核心品牌 token 必中 + 其余按比例阈值；或剔除 `by` 等功能词与纯数字
+2. **Deterministic sufficiency** — requirement 拆 checklist，用 verified claims 规则匹配，不让 agent 主观拍板
+3. **NEGATIVE 路径来源校验无代码约束** — 目前靠 prompt 让 LLM 自判「是否官网/MICE 目录」，
    可考虑按域名做确定性判定（阶段 13 遗留）
-3. **Query Generator 域名启发式** — prior URLs 目前纯 LLM 推断 `site:`，可加规则
-4. **Selector 用 search `raw_content`** — 对比 Tavily Extract，省 API / 降延迟（讨论过，未改）
-5. **Engine PR #2** — 未 merge；本地 dedupe 逻辑已覆盖部分意图，但未 1:1 对齐 PR
-6. **Sufficient 子集分析** — 不只看 overall rate，看 sufficient runs 的 tool calls 与 claim 质量
+4. **Query Generator `site:` 打在聚合站** — v5 有 48% query 用 `site:`，其中约 12% 指向
+   `bookstaygo.com` / `bangkokhotel24.com` / `unionspace.co.th` 等非官网域名，
+   直接浪费掉 4 次预算里的 1 次（Le Fenix 第 4 次搜索即为此）
+5. **Selector 用 search `raw_content`** — 对比 Tavily Extract，省 API / 降延迟（讨论过，未改）
+6. **Engine PR #2** — 未 merge；本地 dedupe 逻辑已覆盖部分意图，但未 1:1 对齐 PR
+7. **Sufficient 子集分析** — 不只看 overall rate，看 sufficient runs 的 tool calls 与 claim 质量
 
 > 阶段 11 的「20–60 硬编码」已在阶段 13 修掉。
 
@@ -498,6 +559,7 @@ Requirement（固定）：
 | `43c92ac` | remove duplicate reserve extraction retry（Engine PR） | **未 merge**（改用 `71bad5b` 重写） |
 | `71bad5b` | 删 reserve fallback 重试；只抽前 5 条 | merged |
 | `a297567` | 负证据出口；规范条款取消 20–60 硬编码 | merged |
+| `3565ad4` | 记录 off-target 被拒 URL（为 query eval 铺路） | merged |
 
 ---
 
