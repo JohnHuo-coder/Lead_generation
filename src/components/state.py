@@ -1,4 +1,4 @@
-from typing import Annotated, TypedDict
+from typing import Annotated, NotRequired, TypedDict
 from operator import add, or_
 from langchain.agents import AgentState
 
@@ -36,7 +36,7 @@ class ResearchState(TypedDict):
     company: str
     collaboration_intent: str
     requirement: str
-    additional_evidence_needed: list[str]
+    additional_evidence_needed: NotRequired[list[str]]
     search_documents: Annotated[dict[str, SearchDocument], or_]
 
     failed_evidence_checks: Annotated[list[EvidenceCheckFailure], add]

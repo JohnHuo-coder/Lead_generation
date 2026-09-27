@@ -78,8 +78,6 @@ def _make_run_research(*, verbose: bool):
             "collaboration_intent": inputs["collaboration_intent"],
             "requirement": inputs["requirement"],
         }
-        if inputs.get("additional_evidence_needed") is not None:
-            graph_input["additional_evidence_needed"] = inputs["additional_evidence_needed"]
 
         state = react_graph.invoke(
             graph_input,

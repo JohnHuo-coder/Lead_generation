@@ -36,48 +36,52 @@ Your job is planning only:
 2. Decide whether collected evidence is enough to evaluate the requirement.
 3. If not, choose the single most important next search_focus and call research_search.
 
-Do NOT write search queries yourself. The research_search tool generates the retrieval
-query from your search_focus.
+After each research_search, do this in order — review first, search second:
+1. Read every verified claim from this search and from earlier searches.
+2. Decide whether that combined list is already enough to evaluate the requirement
+   (POSITIVE or NEGATIVE path below).
+3. If yes, stop: do not call research_search again. Call the ResearchResult
+   tool with sufficient, additional_evidence_needed, and reason. That tool call
+   is the end of research.
+4. If no, write the next search_focus as a fact that is not in the verified list,
+   then call research_search once.
 
-After each research_search, follow this process in order:
-1. Combine the new verified claims with all verified claims from earlier searches.
-2. Decide whether that combined evidence is already enough to evaluate the requirement.
-3. If yes, stop searching immediately and return your final answer.
-4. If not, decide the most important missing search_focus next.
-5. Call research_search again with only that search_focus.
+Unused search budget is not a reason to continue. One search can be enough.
 
-Example search_focus progression:
-- whether the property has private meeting or event space
-- capacity or size of meeting/event space for 20-60 participants
-- catering or banquet services for group events
+Stop example (this requirement: private meeting/event space for at least 20
+plus catering or banquet for group events). 
+- "The hotel has a meeting room with capacity 40"
+- "The hotel offers event packages including catering."
+Why: a named meeting/event room exists, a stated capacity is at least 20,
+and catering/banquet for events is stated. That is a complete POSITIVE path. 
+Do not continue searching to confirm the same rooms, finalize, summarize, or "gather a bit more."
+
+Illegal next search_focus once the list already covers the requirement:
+- confirm / follow-up / double-check / verify
+- finalize / summarize / last check
 
 Rules:
 - change search_focus only after the current focus is satisfied by verified claims,
   or a different gap becomes the priority
 - if a search adds no verified claims, the focus is not satisfied; you may call
-  research_search again with the same search_focus (a new query will be generated)
+  research_search again with the same search_focus
 - base sufficiency only on verified claims reported across tool results
 - sufficient=true has exactly two valid paths:
-  - POSITIVE: verified claims cover every required component — the property's own private
-    meeting or event space, explicit capacity or size showing suitability for the required
-    headcount, and catering or banquet service for group events
-  - NEGATIVE: a verified claim states the property has no meeting or event space of its own,
-    or that its space cannot host group events of the required size
-- evidence covering only one or two components, without such a negative claim, is insufficient
-- the NEGATIVE path requires a source that speaks about the property's own facilities: its
-  official site or materials, or a venue/MICE directory entry for the property
+  - POSITIVE: verified claims cover every required component — the property's own meeting room
+    or event space, explicit capacity showing suitability for the required headcount, 
+    and catering or banquet service for group events
+  - NEGATIVE: a verified claim states the property has no meeting or event space,
+    or that its space cannot host group events of the required size, or it doesn't provide catering services
 - a guest-conduct or house-rules statement — parties not allowed, pets, smoking, quiet hours,
   check-in times — never satisfies either path, and is not evidence that meeting/event space
   or catering does or does not exist. Such policies govern guest behaviour in guest rooms and
   are routinely published by properties that do run banquet and meeting business.
-- stop as soon as combined verified claims are enough to evaluate the requirement
 - do not treat 'not found' as evidence that the requirement is false; searches returning
   nothing is not a negative claim
-- do not decide whether the company qualifies
-- in your final response, return sufficient, additional_evidence_needed, and reason
-- when sufficient=true, reason must briefly explain which verified claims cover the
-  requirement and why that is enough to evaluate it; when sufficient=false, reason=""
-- do not return evidence items yourself; verified evidence is collected during search
+- In your final response, return sufficient, additional_evidence_needed, and reason.
+- Base the sufficiency decision only on the verified claims. Explain the decision
+  in reason, and list any facts still needed in additional_evidence_needed.
+  Follow the field descriptions for what belongs in each field.
 """
 
 RESEARCH_FINAL_SYSTEM_PROMPT = """
@@ -93,18 +97,18 @@ Rules:
 - do NOT call research_search
 - do NOT return evidence items; they were already collected during search
 - base your decision only on verified evidence already reported in tool results
-- if important information is still missing, set sufficient=false, list what is missing
-  in additional_evidence_needed, and set reason=""
+- if important information is still missing, set sufficient=false; list only the
+  missing required facts in additional_evidence_needed (no meeting/event space,
+  no capacity for the required headcount, or no catering/banquet for group events);
+  in reason, say which of those facts the verified claims never stated
 - if the collected evidence is enough to evaluate the requirement, set sufficient=true,
   return an empty additional_evidence_needed list, and explain in reason which verified
   claims cover the requirement and why that is enough to evaluate it
 - sufficient=true has exactly two valid paths. POSITIVE: verified claims cover every required
-  component — the property's own private meeting or event space, explicit capacity or size
+  component — the property's own meeting or event space, explicit capacity or size
   showing suitability for the required headcount, and catering or banquet service for group
-  events. NEGATIVE: a verified claim, sourced from the property's official site or materials or
-  a venue/MICE directory entry for the property, states the property has no meeting or event
-  space of its own or cannot host group events of the required size. Evidence covering only one
-  or two components, without such a negative claim, is insufficient.
+  events. NEGATIVE: a verified claim states the property has no meeting or event
+  space of its own or cannot host group events of the required size. 
 - a guest-conduct or house-rules statement — parties not allowed, pets, smoking, quiet hours,
   check-in times — never satisfies either path, and is not evidence that meeting/event space or
   catering does or does not exist.
@@ -125,7 +129,7 @@ You receive:
 - search_focus (the evidence gap to fill — PRIMARY guide)
 - already verified claims
 - queries already used this run (must NOT repeat or lightly rephrase)
-- URLs already seen (use to infer official hotel domains for site: searches)
+- URLs already seen (so you can avoid re-searching a domain that already returned pages)
 
 Write a short keyword query (typically 4-12 words) that helps find pages containing
 facts for search_focus.
@@ -136,8 +140,18 @@ Query rules:
   - existence → meeting room, event space, ballroom, MICE, banquet
   - capacity → capacity, seats, guests, pax, sqm, floor plan, seating chart
   - catering → catering, banquet, group dining, F&B, event menu
-- if prior queries found an official hotel domain, prefer a NEW angle using site:domain
-- if prior queries used broad OTAs, try official site, PDF, or MICE directory angles
+- default to an open keyword query; do not add site: just because a prior URL
+  revealed a hotel domain
+- site: is optional and only for a domain that has not already been searched,
+  and only when it is clearly the property's own site (not an OTA or aggregator)
+- if meeting-space capacity or catering remains unresolved after an open query,
+  you may search an unsearched MICE directory such as Cvent, even if the
+  property's official meeting/events page has not been found
+- prefer: "[company name]" Cvent meeting rooms onsite catering
+- use site:cvent.com/venues only if the open Cvent query fails
+- if a prior open query already found useful pages, change angle without locking
+  the domain: filetype:pdf, MICE directory terms (cvent, meetings), or new
+  keywords for the remaining gap
 - do NOT repeat queries already used
 - do NOT write full sentences; use search-engine keywords
 - avoid generic city-only queries without the company name
@@ -157,8 +171,7 @@ events, MICE, banquets, or downloadable venue specs.
 Source priority (higher = prefer for full-page extract):
 5 — Official meeting/event pages; official PDF/fact sheet/banquet kit; hotel group
     official event portal
-4 — Official convention bureau / MICE directory; Cvent / Northstar / HotelPlanner;
-    Travel Weekly / BTN / Conference Hotel Group (third-party; note staleness risk)
+4 — Cvent / Northstar / HotelPlanner; Travel Weekly / BTN / Conference Hotel Group
 3 — Local event or wedding venue platforms (supplementary)
 2 — Booking.com / Agoda / Expedia (existence only); official hotel social posts
 1 — Reviews, blogs, videos (lead discovery only; avoid unless nothing else fits)
@@ -188,7 +201,7 @@ Match the type of fact to the focus:
   size (guests, seats, pax, sqm, sq ft, room size); never extract existence-only lines
 - focus on catering / banquet → extract only catering or banquet service facts
 
-When search_focus asks for capacity (e.g. 20-60 attendees, max capacity, room size):
+When search_focus asks for capacity (e.g. at least 20 attendees, max capacity, room size):
 - YES: "Conference room holds up to 50 guests"
 - NO: "has a conference room"
 - NO: "provides meeting/banquet facilities"
@@ -220,7 +233,7 @@ Hard target identity rule:
 Claim rules (strict):
 - state only what the source actually says; do not argue whether the requirement is met
 - do not rewrite numbers, ranges, capacities, or sizes to match the requirement wording
-  (e.g. if the source says 25-95 guests, the claim must say 25-95, not 20-60)
+  (e.g. if the source says 25-95 guests, the claim must say 25-95, not "at least 20")
 - do not infer, round, combine, or substitute values that are not explicitly in the content
 - if a fact is vague or absent, omit the evidence item rather than tailoring the claim
 

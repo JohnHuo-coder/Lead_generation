@@ -78,15 +78,12 @@ research_agent = create_agent(
 
 
 def search_node(state: ResearchState) -> dict:
-    remaining = state.get("additional_evidence_needed") or []
-    focus = "; ".join(remaining) if remaining else state["requirement"]
     result = research_agent.invoke(
         {"messages": [
             HumanMessage(content=(
                 f"Company: {state['company']}\n"
                 f"Collaboration intent: {state['collaboration_intent']}\n"
-                f"Requirement: {state['requirement']}\n"
-                f"Current research focus: {focus}"
+                f"Requirement: {state['requirement']}"
             ))],
             "tool_call_count": 0,
             "search_documents": {},
@@ -120,6 +117,7 @@ def search_node(state: ResearchState) -> dict:
         "sufficient_reason": structured_response.reason,
         "search_tool_call_count": result.get("tool_call_count", 0),
         "search_documents": result.get("search_documents", {}),
+        "search_queries_used": result.get("search_queries_used", []),
         "batch_result_id_match_failures": result.get("batch_result_id_match_failures", 0),
         "off_target_company_rejections": result.get("off_target_company_rejections", 0),
         "off_target_rejections": result.get("off_target_rejections", []),

@@ -479,13 +479,16 @@ def _format_additional_evidence_needed(report: dict[str, Any]) -> list[str]:
 
 
 def _format_sufficient_reason(report: dict[str, Any]) -> list[str]:
-    if report.get("sufficient") is not True:
-        return []
-
     reason = (report.get("sufficient_reason") or "").strip()
-    if not reason:
-        return ["Sufficient reason: (none provided)"]
-    return [f"Sufficient reason: {reason}"]
+    if report.get("sufficient") is True:
+        if not reason:
+            return ["Sufficient reason: (none provided)"]
+        return [f"Sufficient reason: {reason}"]
+    if report.get("sufficient") is False:
+        if not reason:
+            return ["Insufficient reason: (none provided)"]
+        return [f"Insufficient reason: {reason}"]
+    return []
 
 
 def _render_source_content_block(content: str, *, label: str = "Source content") -> str:
@@ -599,8 +602,16 @@ def _render_run_report_html(report: dict[str, Any]) -> str:
 
     additional_evidence_section = ""
     if sufficient is False:
+        reason = (report.get("sufficient_reason") or "").strip()
+        reason_body = (
+            f"<p>{_escape(reason)}</p>"
+            if reason
+            else "<p class='muted'>No reason provided.</p>"
+        )
         additional_evidence_section = (
             "<div class='insufficient-callout'>"
+            "<h3>Why Insufficient</h3>"
+            f"{reason_body}"
             "<h3>Additional Evidence Needed</h3>"
             f"{_render_additional_evidence_block(report.get('additional_evidence_needed') or [])}"
             "</div>"

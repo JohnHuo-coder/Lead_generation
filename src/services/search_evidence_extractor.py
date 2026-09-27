@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import re
+import unicodedata
 
 from langchain_core.messages import HumanMessage, SystemMessage
 
@@ -16,6 +17,7 @@ _CAPACITY_FOCUS_HINTS = (
     "sq ft",
     "square",
     "20-60",
+    "at least 20",
     "room types",
     "maximum capacity",
     "max capacity",
@@ -58,36 +60,155 @@ _GENERIC_COMPANY_TOKENS = {
     "sukhumvit",
     "the",
 }
+_FUNCTION_WORDS = {"a", "an", "and", "at", "by", "for", "in", "of", "on"}
+_WEAK_COMPANY_TOKENS = {
+    "building",
+    "centre",
+    "center",
+    "city",
+    "garden",
+    "grand",
+    "house",
+    "inn",
+    "lodge",
+    "night",
+    "park",
+    "place",
+    "plaza",
+    "point",
+    "residence",
+    "room",
+    "station",
+    "suite",
+    "suites",
+    "tower",
+}
+_PARENT_SEGMENT_STOP_TOKENS = _GENERIC_COMPANY_TOKENS | {"soi", "thailand"}
+_WORD_PATTERN = re.compile(r"[a-z0-9]+")
+_SUBWORD_PATTERN = re.compile(r"\d+|[a-z]+")
+
+
+def _normalize_tokens_source(text: str) -> str:
+    decomposed = unicodedata.normalize("NFKD", text.casefold())
+    return "".join(char for char in decomposed if not unicodedata.combining(char))
+
+
+def _tokenize(text: str) -> list[str]:
+    """Whole alphanumeric runs only, so a name like `S15` is never split into `s` and
+    `15` and reduced to a token that matches almost any page."""
+    return _WORD_PATTERN.findall(_normalize_tokens_source(text))
+
+
+def _strip_parent_segment(tokens: list[str]) -> list[str]:
+    """Drop the parent company named after `by`, which on-target pages often omit:
+    a cvent entry for `INNSiDE by Melia Bangkok Sukhumvit` may only say `INNSIDE`.
+    The property's own address resumes at the first generic or numeric token."""
+    if "by" not in tokens:
+        return tokens
+
+    index = tokens.index("by")
+    tail = tokens[index + 1:]
+    cursor = 0
+    while cursor < len(tail) and not (
+        tail[cursor] in _PARENT_SEGMENT_STOP_TOKENS or tail[cursor].isdigit()
+    ):
+        cursor += 1
+    return tokens[:index] + tail[cursor:]
 
 
 def _company_tokens(company: str) -> set[str]:
     return {
         token
-        for token in re.findall(r"[\w]+", company.casefold())
-        if token not in _GENERIC_COMPANY_TOKENS
+        for token in _strip_parent_segment(_tokenize(company))
+        if token not in _GENERIC_COMPANY_TOKENS and token not in _FUNCTION_WORDS
     }
 
 
-def _document_tokens(document: SearchDocument) -> set[str]:
-    return set(
-        re.findall(
-            r"[\w]+",
-            " ".join(
-                [document["title"], document["url"], document["content"]]
-            ).casefold(),
-        )
+def _is_distinctive_token(token: str) -> bool:
+    if token.isdigit() or token in _WEAK_COMPANY_TOKENS:
+        return False
+    if any(char.isdigit() for char in token) and any(char.isalpha() for char in token):
+        return True
+    return len(token) >= 5
+
+
+def _company_name_phrase(company: str) -> list[str]:
+    """Full property name minus parent-company and function words, kept as a phrase
+    so `Night Hotel Building 2` cannot match a page that merely says team building."""
+    return [
+        token
+        for token in _strip_parent_segment(_tokenize(company))
+        if token not in _FUNCTION_WORDS
+    ]
+
+
+def _name_phrase_appears(company: str, document: SearchDocument) -> bool:
+    phrase = _company_name_phrase(company)
+    if not phrase:
+        return False
+    runs = _document_runs(document)
+    width = len(phrase)
+    if any(runs[index:index + width] == phrase for index in range(len(runs) - width + 1)):
+        return True
+    glued = "".join(phrase)
+    return any(glued in run for run in _document_url_runs(document))
+
+
+def _requires_name_phrase(company_tokens: set[str]) -> bool:
+    return bool(company_tokens) and not any(
+        _is_distinctive_token(token) for token in company_tokens
     )
+
+
+def _document_runs(document: SearchDocument) -> list[str]:
+    return _tokenize(
+        " ".join([document["title"], document["url"], document["content"]])
+    )
+
+
+def _document_url_runs(document: SearchDocument) -> list[str]:
+    return _tokenize(document["url"])
+
+
+def _document_tokens(document: SearchDocument) -> set[str]:
+    """Each run also contributes its letter/digit parts, because url slugs run words
+    together: `sukhumvit20` must satisfy a required `20`, and an underscore-joined
+    `maitria_hotel_sukhumvit_18_bangkok_a_chatrium_collection` a required `chatrium`."""
+    tokens: set[str] = set()
+    for run in _document_runs(document):
+        tokens.add(run)
+        tokens.update(_SUBWORD_PATTERN.findall(run))
+    return tokens
+
+
+def _token_appears_in_document(token: str, document: SearchDocument) -> bool:
+    """A brand token glued into a hostname (`movenpickbangkoksukhumvit15`) still counts.
+    Substring matching is URL-only, so title words like `teambuilding` do not satisfy
+    `building`. Short tokens and bare numbers never substring-match."""
+    tokens = _document_tokens(document)
+    if token in tokens:
+        return True
+    if token.isdigit() or len(token) < 4:
+        return False
+    return any(token in run for run in _document_url_runs(document))
 
 
 def _document_mentions_company(
     company_tokens: set[str],
     document: SearchDocument,
+    company: str,
 ) -> bool:
-    return bool(company_tokens) and company_tokens <= _document_tokens(document)
+    if not company_tokens:
+        return False
+    if not all(_token_appears_in_document(token, document) for token in company_tokens):
+        return False
+    if _requires_name_phrase(company_tokens):
+        return _name_phrase_appears(company, document)
+    return True
 
 
 def document_mentions_company(document: SearchDocument, company: str) -> bool:
-    return _document_mentions_company(_company_tokens(company), document)
+    return _document_mentions_company(_company_tokens(company), document, company)
 
 
 def missing_company_tokens(document: SearchDocument, company: str) -> list[str]:
@@ -95,7 +216,16 @@ def missing_company_tokens(document: SearchDocument, company: str) -> list[str]:
     company_tokens = _company_tokens(company)
     if not company_tokens:
         return []
-    return sorted(company_tokens - _document_tokens(document))
+    missing = sorted(
+        token
+        for token in company_tokens
+        if not _token_appears_in_document(token, document)
+    )
+    if missing:
+        return missing
+    if _requires_name_phrase(company_tokens) and not _name_phrase_appears(company, document):
+        return [" ".join(_company_name_phrase(company))]
+    return []
 
 
 def _focus_requests_capacity(search_focus: str) -> bool:
