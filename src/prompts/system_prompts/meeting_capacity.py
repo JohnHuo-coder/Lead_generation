@@ -1,32 +1,3 @@
-FIT_SCORING_SYSTEM_PROMPT = """
-You are an expert at evaluating business collaboration fit.
-Your task is NOT to evaluate the overall business.
-Your task is ONLY to evaluate a single business collaboration requirement using the available evidence.
-The input contains:
-- the collaboration intent
-- one business requirement
-- factual evidence relevant to that requirement
-Evaluate only this requirement.
-Do not speculate beyond the provided evidence.
-Base your evaluation entirely on the supplied facts.
-If the available evidence supports the requirement strongly, assign a high score.
-If the evidence indicates the requirement is poorly satisfied, assign a low score.
-The score should reflect how well the available evidence aligns with the requirement, not how complete the evidence is.
-Evidence completeness has already been verified before this step.
-Provide a concise explanation citing the most important evidence.
-Use the following scoring guideline:
-90-100
-Excellent alignment.
-75-89
-Good alignment with only minor concerns.
-60-74
-Moderate alignment with noticeable limitations.
-40-59
-Weak alignment.
-0-39
-Poor alignment or evidence directly contradicts the requirement.
-"""
-
 RESEARCH_AGENT_SYSTEM_PROMPT = """
 Research one company against one requirement. You have a research search budget of
 {max_search_calls} calls.
@@ -48,12 +19,9 @@ After each research_search, do this in order — review first, search second:
 
 Unused search budget is not a reason to continue. One search can be enough.
 
-Stop example (this requirement: private meeting/event space for at least 20
-plus catering or banquet for group events). 
+Stop example (this requirement: private meeting/event space for at least 20 people). 
 - "The hotel has a meeting room with capacity 40"
-- "The hotel offers event packages including catering."
-Why: a named meeting/event room exists, a stated capacity is at least 20,
-and catering/banquet for events is stated. That is a complete POSITIVE path. 
+Why: a named meeting/event room exists, a stated capacity is at least 20. That is a complete POSITIVE path. 
 Do not continue searching to confirm the same rooms, finalize, summarize, or "gather a bit more."
 
 Illegal next search_focus once the list already covers the requirement:
@@ -68,14 +36,13 @@ Rules:
 - base sufficiency only on verified claims reported across tool results
 - sufficient=true has exactly two valid paths:
   - POSITIVE: verified claims cover every required component — the property's own meeting room
-    or event space, explicit capacity showing suitability for the required headcount, 
-    and catering or banquet service for group events
+    or event space and explicit capacity showing suitability for the required headcount
   - NEGATIVE: a verified claim states the property has no meeting or event space,
-    or that its space cannot host group events of the required size, or it doesn't provide catering services
+    or that its space cannot host group events of the required size
 - a guest-conduct or house-rules statement — parties not allowed, pets, smoking, quiet hours,
-  check-in times — never satisfies either path, and is not evidence that meeting/event space
-  or catering does or does not exist. Such policies govern guest behaviour in guest rooms and
-  are routinely published by properties that do run banquet and meeting business.
+  check-in times — never satisfies either path, and is not evidence that meeting/event space 
+  does or does not exist. Such policies govern guest behaviour in guest rooms and
+  are routinely published by properties that do run meeting business.
 - do not treat 'not found' as evidence that the requirement is false; searches returning
   nothing is not a negative claim
 - In your final response, return sufficient, additional_evidence_needed, and reason.
@@ -99,26 +66,21 @@ Rules:
 - base your decision only on verified evidence already reported in tool results
 - if important information is still missing, set sufficient=false; list only the
   missing required facts in additional_evidence_needed (no meeting/event space,
-  no capacity for the required headcount, or no catering/banquet for group events);
+  or no capacity for the required headcount);
   in reason, say which of those facts the verified claims never stated
 - if the collected evidence is enough to evaluate the requirement, set sufficient=true,
   return an empty additional_evidence_needed list, and explain in reason which verified
   claims cover the requirement and why that is enough to evaluate it
 - sufficient=true has exactly two valid paths. POSITIVE: verified claims cover every required
-  component — the property's own meeting or event space, explicit capacity or size
-  showing suitability for the required headcount, and catering or banquet service for group
-  events. NEGATIVE: a verified claim states the property has no meeting or event
-  space of its own or cannot host group events of the required size. 
+  component — the property's own meeting or event space and explicit capacity or size
+  showing suitability for the required headcount
+  NEGATIVE: a verified claim states the property has no meeting or event
+  space of its own. 
 - a guest-conduct or house-rules statement — parties not allowed, pets, smoking, quiet hours,
   check-in times — never satisfies either path, and is not evidence that meeting/event space or
   catering does or does not exist.
 - do not decide whether the company qualifies
 """
-
-RESEARCH_FINAL_HUMAN_REMINDER = (
-    "Search budget is exhausted. Call the ResearchResult tool now with "
-    "`sufficient`, `additional_evidence_needed`, and `reason`."
-)
 
 QUERY_GENERATOR_SYSTEM_PROMPT = """
 You write one Tavily web search query for a B2B hotel research pipeline.
@@ -139,12 +101,11 @@ Query rules:
 - tailor keywords to search_focus type:
   - existence → meeting room, event space, ballroom, MICE, banquet
   - capacity → capacity, seats, guests, pax, sqm, floor plan, seating chart
-  - catering → catering, banquet, group dining, F&B, event menu
 - default to an open keyword query; do not add site: just because a prior URL
   revealed a hotel domain
 - site: is optional and only for a domain that has not already been searched,
   and only when it is clearly the property's own site (not an OTA or aggregator)
-- if meeting-space capacity or catering remains unresolved after an open query,
+- if meeting-space capacity remains unresolved after an open query,
   you may search an unsearched MICE directory such as Cvent, even if the
   property's official meeting/events page has not been found
 - prefer: "[company name]" Cvent meeting rooms onsite catering
@@ -165,8 +126,8 @@ Each candidate includes url, title, and a short content snippet.
 Use search_focus as the primary guide for what evidence is missing.
 
 Pick pages most likely to contain detailed facts for search_focus — not generic homepages.
-For meeting/event/capacity/catering research, prefer pages that look like meetings,
-events, MICE, banquets, or downloadable venue specs.
+For meeting/event/capacity research, prefer pages that look like meetings,
+events, MICE, or downloadable venue specs.
 
 Source priority (higher = prefer for full-page extract):
 5 — Official meeting/event pages; official PDF/fact sheet/banquet kit; hotel group
@@ -196,10 +157,10 @@ or weaker versions of them (e.g. do not extract "has a conference room" again if
 
 Extract ONLY claims that directly answer THIS batch's search_focus — nothing else.
 Match the type of fact to the focus:
-- focus on existence / availability → extract only whether a qualifying space or service exists
+- focus on existence / availability → extract whether a qualifying space or service exists;
+  if a meeting or event room is named, include that name in the claim
 - focus on capacity / headcount / size → extract ONLY claims with explicit numbers or measurable
   size (guests, seats, pax, sqm, sq ft, room size); never extract existence-only lines
-- focus on catering / banquet → extract only catering or banquet service facts
 
 When search_focus asks for capacity (e.g. at least 20 attendees, max capacity, room size):
 - YES: "Conference room holds up to 50 guests"
@@ -207,7 +168,10 @@ When search_focus asks for capacity (e.g. at least 20 attendees, max capacity, r
 - NO: "provides meeting/banquet facilities"
 - NO: "offers event spaces ideal for conferences" with no capacity figure
 
-When search_focus asks for existence, do not extract capacity figures unless they also prove existence.
+When search_focus asks for existence, a named meeting/event room and its stated capacity
+are both useful: capacity on that space proves the space exists. Extract them.
+Do not extract guest-room occupancies or other numbers that do not identify a meeting
+or event space.
 
 Include claims that support or contradict the search_focus. A source explicitly stating the
 property has no meeting/event space, or none that fits the required size, is a valid claim when
@@ -220,10 +184,8 @@ contain the specific fact requested by search_focus.
 Do NOT extract booking-platform house rules or guest-conduct policies (for example "Parties/events
 are not allowed", "does not accommodate bachelor(ette) or similar parties", check-in/check-out
 times, smoking, pet, quiet-hour, or age policies). These describe guest conduct in guest rooms
-and are not evidence about the existence, capacity, or catering of meeting or event space, even
-when search_focus asks about events. Ordinary guest services such as breakfast are not evidence
-of catering or banquet service for group events unless the source explicitly describes that
-group-event service.
+and are not evidence about the existence or capacity of meeting or event space, even
+when search_focus asks about events. 
 
 Hard target identity rule:
 - every claim's grammatical subject must be the target company
@@ -251,62 +213,4 @@ Excerpt copying rules (strict):
 - do not compute, convert, round, or combine numbers unless that exact value appears in the content
 - if the exact text substantiating the claim is not present, omit the evidence item
 - prefer the shortest contiguous span that directly substantiates the claim
-"""
-
-EXCERPT_DERIVATION_SYSTEM_PROMPT = """
-You judge whether a candidate excerpt is inferable from the provided source content,
-even though it does not appear verbatim.
-
-Set derived_from_content=true ONLY when:
-- the excerpt restates the same fact(s) already stated in the content, with no new information
-- OR the excerpt is a direct calculation or unit conversion from numbers/dimensions explicitly
-  present in the content (e.g. area from length × width when both appear in the content)
-
-Set derived_from_content=false when:
-- the excerpt introduces numbers, names, capacities, measurements, or facts not present in
-  the content and not directly calculable from values that are present
-- the excerpt merges unrelated fragments, table rows, or headings into a synthetic statement
-  that does not appear in the content
-- the excerpt is a guess, inference, or summary beyond what the content states
-
-Base your decision only on the provided source content. Do not use outside knowledge.
-Return a concise reason citing the relevant content when true, or explaining what is missing
-when false.
-"""
-
-VERIFICATION_SYSTEM_PROMPT = """
-You verify whether a claim about a target company is supported by provided source excerpts.
-
-You will receive:
-- the target company name
-- a claim about that company
-- either source excerpts with surrounding context, or the full source content from a single page
-
-Your job is ONLY to decide whether the provided source text supports the claim.
-
-Rules:
-- FIRST check subject identity: if the claim's subject is an organization other than the target company,
-  immediately set support=false and unclear_ownership=false without assessing excerpt support
-- base your decision only on the provided excerpts and their context
-- do not use outside knowledge
-- do not evaluate whether the company meets the overall business requirement
-- do not infer facts that are not stated or clearly implied by the excerpts
-- treat the claim as supported only if the excerpts clearly indicate the service,
-  facility, or fact belongs to the target company and substantiate the claim
-- if the excerpts clearly substantiate the claim, set support=true and unclear_ownership=false
-- if the excerpts are vague, unrelated, about a different subject, or too weak to
-  justify the claim, set support=false
-
-Ownership rule:
-- if support=false because the excerpts mention a service or facility but do not
-  clearly show whether it belongs to the target company versus a nearby business,
-  partner, attraction, or other third party, set unclear_ownership=true
-- examples: missing subject, "spa nearby", "event space available in the area",
-  "walking distance to conference facilities"
-- if support=false for any other reason, set unclear_ownership=false
-
-Return:
-- support: true or false
-- reason: a concise explanation citing the relevant excerpt content
-- unclear_ownership: true only when ownership or attribution is the main issue
 """

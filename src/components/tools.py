@@ -308,7 +308,6 @@ def _extract_and_verify_batch(
     batch_documents: dict[str, SearchDocument],
     *,
     company: str,
-    collaboration_intent: str,
     requirement: str,
     search_query: str,
     search_focus: str,
@@ -323,7 +322,6 @@ def _extract_and_verify_batch(
     ]
     batch_evidence, result_id_match_failures = extract_evidence_from_search_batch(
         company=company,
-        collaboration_intent=collaboration_intent,
         requirement=requirement,
         search_query=search_query,
         search_focus=search_focus,
@@ -397,7 +395,6 @@ def research_search(
     merged_verification, result_id_match_failures, duplicate_claim_skips = _extract_and_verify_batch(
         search_documents,
         company=company,
-        collaboration_intent=runtime.state.get("collaboration_intent", ""),
         requirement=requirement,
         search_query=query,
         search_focus=search_focus,

@@ -10,6 +10,7 @@ from schemas.research_schemas import (
     VerifyResult,
 )
 from schemas.fit_scoring_schemas import FitScoreResult
+from schemas.test_research_schemas import PageEvidenceResult, TestVerifyResult
 
 load_dotenv()
 
@@ -45,3 +46,11 @@ structured_excerpt_derivation_llm = ChatOpenAI(
 structured_fit_score_llm = ChatOpenAI(
     model=RESEARCH_LLM_MODEL,
 ).with_structured_output(FitScoreResult)
+
+structured_test_research_extract_llm = ChatOpenAI(
+    model=RESEARCH_LLM_MODEL,
+).with_structured_output(PageEvidenceResult)
+
+structured_test_research_verify_llm = ChatOpenAI(
+    model=RESEARCH_LLM_MODEL,
+).with_structured_output(TestVerifyResult)

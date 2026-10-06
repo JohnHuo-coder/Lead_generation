@@ -75,7 +75,6 @@ def _make_run_research(*, verbose: bool):
 
         graph_input = {
             "company": inputs["company"],
-            "collaboration_intent": inputs["collaboration_intent"],
             "requirement": inputs["requirement"],
         }
 

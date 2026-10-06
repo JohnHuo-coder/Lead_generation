@@ -1,7 +1,7 @@
 # Research Pipeline 改进历史
 
 记录每次 batch test 前后改了什么，方便对比报告、回溯决策。  
-**当前 main 已 push 到：** `3565ad4` · 工作区干净，阶段 8–14 全部已合入。
+**当前 main 已 push 到：** `a38b4cf`（阶段 8–15）。阶段 16–19 仍在工作区，未 commit。
 
 ---
 
@@ -410,8 +410,7 @@ insufficient: 18 runs, 72 次搜索, 平均 4.00  ← 18/18 全部烧满预算
 
 **文件：** `system_prompts.py`（`RESEARCH_AGENT_*`, `RESEARCH_FINAL_*`, `SEARCH_BATCH_EVIDENCE_*`）
 
-**待验证：** v6 观察 —— 预期 8 家 0-evidence 里部分转为 NEGATIVE 路径提前收敛（省搜索预算），
-同时 house-rules 误判归零。
+**待验证：** 已用阶段 11–14 代码跑 v6（见阶段 16）。house-rules 误判与负证据出口的定量对比未单独拆表。
 
 ---
 
@@ -468,7 +467,126 @@ v5 的 8 家 0-evidence 里，HOP INN、The Quarter On Nut by UHG、iCheck inn R
 否则 gold 标签与过滤器行为同时变，无法归因。
 
 > 这也修正了阶段 8 的推测：v5 off-target 20.97/公司**未必**是「扫描面扩大」，
-> 更可能是**公司名越长越容易被误杀**。
+> 更可能是**公司名越长越容易被误杀**。阶段 15 已修过滤器，见下。
+
+---
+
+## 阶段 15：立刻停搜 + 过滤器 + Cvent 后续 — `a38b4cf` ✅ merged（9/26）
+
+一次提交里三件相关的事：agent 拿到够用的 claim 仍继续搜；过滤器既误杀官网又误放无关会展页；query generator 把 `site:` 锁在酒店域名上。
+
+### 15.1 Agent：够了就停，Call ResearchResult
+
+**动机：** Avani 等 run 三要素 claim 已齐，仍发 `confirm ... follow-up`，v5 sufficient 平均 ~3.68 次搜索。收紧「什么算够」反而让模型更不敢停。
+
+**改动：**
+
+- 每次 `research_search` 后先读 verified claims，够了立刻调 **ResearchResult**（停搜工具），未用完预算不是继续搜的理由
+- 给 POSITIVE 停搜示例（至少 20 人会议室 + catering）；禁止 confirm / follow-up / finalize / summarize
+- requirement 从 `20-60` 改为 **at least 20**（容量下限，不再要上限）
+- 去掉「不要自己写 query」「不要一上来搜官网/PDF」「下一次 focus 只能是单维度」——都会误导第一次检索拆维度
+- `ResearchResult.reason` 无论 sufficient 真假都要写；`additional_evidence_needed` 只列还缺的必需要素，**不再作为 graph 输入**，第一次 focus 永远是整条 requirement
+- `search_queries_used` 写回 research state，report / eval 能看到实际 query
+
+**文件：** `system_prompts.py`（当时仍是单文件）, `research_schemas.py`, `nodes.py`, `state.py`, `eval_research.py`, `research_report.py`
+
+### 15.2 Off-target 过滤器：误杀官网、误放 Expo
+
+修阶段 14 量化过的误杀，并堵住随后出现的误放。
+
+| 问题 | 处理 |
+|---|---|
+| Mövenpick / diacritics | NFKD 去音标，`mövenpick` = `movenpick` |
+| `INNSiDE by Melia` 官网/Cvent 常不写母公司 | `by` 之后的父公司段丢掉 |
+| `by` / `on` / `the` 当必中 token | 功能词剔除；**纯数字保留**（`S15` 的 `15`、Sukhumvit 11 的 `11`） |
+| `S15` 被拆成 `s`+`15`，几乎任何页都过 | 公司名侧整段 alphanumeric；文档侧再拆字母/数字，所以 slug `sukhumvit20` 仍能满足 `20` |
+| 官网 hostname `movenpickbangkoksukhumvit15` 标题无品牌，缺 token `movenpick` | 长度 ≥ 4 的非数字 token 允许在 **URL** 里子串匹配 |
+| 子串一度打在 title 上：`Teambuilding` 命中 `building`，新加坡 Expo 混进 Night Hotel Building 2 | 子串匹配收窄到 URL；弱店名（全是 `night`/`building`/`2` 这类）还要连续店名短语 `night hotel building 2` |
+
+`missing_company_tokens` 与放行规则对齐，日志不再谎报。
+
+**仍可能误杀：** 官网省略邻里词（Citin 官网 `citinsukhumvit11.com` 缺 `nana`）；HOP INN 的 `station` 仍偏脆。
+
+**文件：** `search_evidence_extractor.py`
+
+### 15.3 Query generator：先开放检索，失败再 Cvent
+
+**动机：** `site:酒店域名` 把检索锁死；很多会议/餐饮事实其实在 Cvent / venue 目录。也不必先找到官网 meeting 页才允许搜 Cvent。
+
+**改动：**
+
+- 默认开放关键词；不要因为已见 URL 里出现酒店域名就加 `site:`
+- `site:` 仅用于尚未搜过、且明显是物业官网的域名（OTA / aggregator 不加）
+- 开放检索之后会议容量或餐饮仍缺 → 可搜 Cvent，**不必先有官网 meeting 页**
+- 优先：`"[company name]" Cvent meeting rooms onsite catering`
+- 这条也失败才用 `site:cvent.com/venues`
+
+**文件：** `QUERY_GENERATOR_SYSTEM_PROMPT`
+
+### 15.4 Query eval 脚本
+
+`scripts/build_query_eval.py`：从 v6 raw states 建 contrastive 样本（effective / ineffective / uncertain），按公司切 train/dev，可并入人工有效 query。产出 `data/query_eval_v6.*`（`*.json` gitignore）。
+
+---
+
+## 阶段 16：v6 batch（47 家，阶段 11–14 代码）⚠️ 早于阶段 15
+
+**报告：** `reports/47_companies/model_gpt-5-mini_research_report_v6.html`  
+**模型：** gpt-5-mini · requirement 仍为 **20–60** 人 + catering（at least 20 是阶段 15 才改的）
+
+| 指标 | v6 |
+|---|---|
+| 完成 | 46（Citin `ConnectionError`） |
+| Sufficient | **31/46（67%）** |
+| Insufficient | 15，全部烧满 4 次搜索 |
+| Off-target | 1151 / 174 次搜索 |
+
+**解读：** sufficient 比 v5 的 40% 高，但样本从 30 家扩到「更可能有场地」的 47 家，不能直接当同口径提升。15 家 insufficient 里只有约 5 家是 0 条证据（纯检索失败），其余是拿到了 claim 仍不敢停或过滤器误杀。LangSmith 里「生成 query 就结束、说没 evidence」多半是 Tavily SDK **无子 span** + 结果被 off-target 滤光，不是没打 Tavily。
+
+---
+
+## 阶段 17：多 requirement prompt pack 📁 local-only（9/27）
+
+**动机：** 不止「会议室 + 容量 + catering」一条；还要「只要会议室+容量」和「spa / pool / gym」。
+
+**改动：**
+
+- 删除单文件 `src/prompts/system_prompts.py`，改为 package：
+  - `meeting_capacity_catering.py` — 原 prompt 搬家
+  - `meeting_capacity.py` — 去掉 catering 维度
+  - `amenities.py` — 店内设施；附近/商场 spa 不算；不走 Cvent
+  - `shared.py` — excerpt derivation、claim verification、搜完催停（三套共用）
+- `RESEARCH_PROMPT_PACK` 在 import graph **之前** 设置：`meeting_capacity_catering`（默认）/ `meeting_capacity` / `amenities`
+- existence 抽取：会议室有名字就写进 claim；existence focus 下会议室容量也抽（同时证明有房），客房人数不抽
+- `ResearchResult.additional_evidence_needed` 不再写死会议三要素，改为 requirement 里还缺的事实（最多 5 条）
+
+**文件：** `src/prompts/system_prompts/*`, `research_schemas.py`, `test.ipynb`（第一格设 pack）
+
+---
+
+## 阶段 18：研究图去掉 collaboration_intent 📁 local-only（9/27）
+
+intent（wellness retreats）和 requirement（会议室/设施）不是同一件事，塞进 agent / extract / fit-score 会让检索跟着 intent 跑。
+
+研究图输入只留 `company` + `requirement`。`email_composer.py` 的 outreach intent 不动。
+
+**文件：** `state.py`, `nodes.py`, `tools.py`, `search_evidence_extractor.py`, `eval_research.py`, `test.ipynb`
+
+---
+
+## 阶段 19：Fit scoring 独立阶段 + passed 📁 local-only（9/28）
+
+开始加回 fit scoring（graph 仍是 search → END，`fit_score_node` 尚未接线）。
+
+**改动：**
+
+- prompt 从 research shared 拆到 `src/prompts/fit_scoring.py`
+- 去掉 `supporting_facts`（就是 verified claims 再摘一遍）
+- 新增 **`passed: bool`**：sufficient ≠ 通过；明确负面证据（无场地、容量不够、无 catering、无要求的设施）必须 `passed=false`
+- `score` 与 `passed` 对齐（通过 75–100，不通过 0–74）
+- `check_qualified` 改看 `passed`，不再用 `score >= 75`
+
+**文件：** `prompts/fit_scoring.py`, `fit_scoring_schemas.py`, `state.py`, `nodes.py`
 
 ---
 
@@ -482,7 +600,7 @@ Requirement（固定）：
 | v3（nano） | gpt-5-nano | **36.7%** | 97.0% | 100 | 3.3 | 阶段 5–6 本地改动 |
 | v4（mini） | gpt-5-mini | **33.3%** | 95.1% | 122 | 3.5 | 阶段 7；evidence 更多但 sufficient 未升 |
 | **v5（mini）** | gpt-5-mini | **40.0%** | 100.0% | 78 | 3.5 | 阶段 8–10；`model_gpt-5-mini_research_report_v5.html`（2026-09-21） |
-| v6（mini） | gpt-5-mini | *未跑* | — | — | — | 阶段 11–13 后待跑；验证 house-rules 误判消除、fallback 删除、负证据出口 |
+| v6（mini） | gpt-5-mini | **67%**（31/46） | — | — | 4.0（insufficient 全满） | 47 家、1 家 ConnectionError；阶段 11–14 代码；口径与 v5 的 30 家不同 |
 
 > **注：** 阶段 10 改完后跑 **test v5**（2026-09-21 20:58 UTC）。
 
@@ -511,12 +629,11 @@ Requirement（固定）：
 
 ---
 
-## 进行中（截至 2026-09-22）
+## 进行中（截至 2026-09-28）
 
-**已 push：** 阶段 5–7 + `reason`（`66d6c4f`）、阶段 8–10（`63b9fe5`）、阶段 11（`028072b`）、
-阶段 12（`71bad5b`）
+**已 push：** 阶段 8–15（`a38b4cf`）。
 
-**工作区干净**，无未 commit 改动。下一步：跑 **v6** 验证阶段 11–12。
+**未 commit：** 阶段 17–19（prompt pack、去掉 collaboration_intent、fit scoring `passed`）。下一步：把 `fit_score_node` 接回 graph，再跑一版验证阶段 15 的停搜 / 过滤器 / Cvent。
 
 **未合的远端分支：** `issues-agent/52581ac4`（`3570f5e`, skip duplicate sources / 旧 PR #2）、
 `issues-agent/83052ddf`（`43c92ac`, reserve retry —— 已由阶段 12 以不同实现覆盖）
@@ -525,19 +642,18 @@ Requirement（固定）：
 
 ## 已知问题 & 待做（讨论过、未实现）
 
-1. **off-target 过滤器过严**（阶段 14 已量化，待修）— 要求公司名 token 全中，官网都会被误杀。
-   候选改法：核心品牌 token 必中 + 其余按比例阈值；或剔除 `by` 等功能词与纯数字
+1. **off-target 过滤器残余误杀** — 阶段 15 已修 diacritics / `by` 父公司 / S15 / 粘连域名 / 弱店名短语。仍可能：Citin 官网缺 `nana`；HOP INN 的 `station`
 2. **Deterministic sufficiency** — requirement 拆 checklist，用 verified claims 规则匹配，不让 agent 主观拍板
-3. **NEGATIVE 路径来源校验无代码约束** — 目前靠 prompt 让 LLM 自判「是否官网/MICE 目录」，
-   可考虑按域名做确定性判定（阶段 13 遗留）
-4. **Query Generator `site:` 打在聚合站** — v5 有 48% query 用 `site:`，其中约 12% 指向
-   `bookstaygo.com` / `bangkokhotel24.com` / `unionspace.co.th` 等非官网域名，
-   直接浪费掉 4 次预算里的 1 次（Le Fenix 第 4 次搜索即为此）
+3. **NEGATIVE 路径来源校验无代码约束** — 目前靠 prompt 让 LLM 自判「是否官网/MICE 目录」
+4. **Query Generator `site:` 打在聚合站** — 阶段 15.3 已改 prompt（默认开放检索，Cvent 作后续）；尚未用新 prompt 定量验证
 5. **Selector 用 search `raw_content`** — 对比 Tavily Extract，省 API / 降延迟（讨论过，未改）
 6. **Engine PR #2** — 未 merge；本地 dedupe 逻辑已覆盖部分意图，但未 1:1 对齐 PR
 7. **Sufficient 子集分析** — 不只看 overall rate，看 sufficient runs 的 tool calls 与 claim 质量
+8. **Tavily 调用在 LangSmith 不可见** — 裸 SDK，trace 看起来像「生成 query 就结束」
+9. **fit_score_node 未接入 graph** — 阶段 19 改了 schema/prompt，`main_graph.py` 仍是 search → END
 
-> 阶段 11 的「20–60 硬编码」已在阶段 13 修掉。
+> 阶段 11 的「20–60 硬编码」已在阶段 13 修掉；运行时 requirement 在阶段 15 改为 at least 20。
+> 阶段 14 的过滤器过严已在阶段 15.2 大部分修掉。
 
 ---
 
@@ -560,6 +676,8 @@ Requirement（固定）：
 | `71bad5b` | 删 reserve fallback 重试；只抽前 5 条 | merged |
 | `a297567` | 负证据出口；规范条款取消 20–60 硬编码 | merged |
 | `3565ad4` | 记录 off-target 被拒 URL（为 query eval 铺路） | merged |
+| `5923dc5` | 把 off-target 拒日志写进本历史文档 | merged |
+| `a38b4cf` | 立刻停搜、过滤器、Cvent 后续、query eval 脚本 | merged |
 
 ---
 

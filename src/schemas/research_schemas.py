@@ -120,23 +120,21 @@ class ResearchResult(BaseModel):
     additional_evidence_needed: list[str] = Field(
         description=(
             "Only facts that are still absent from the verified claims and that "
-            "block evaluating the requirement. Each item must be one of: "
-            "whether the property has its own meeting room or event space; "
-            "capacity of that space for the required headcount; "
-            "whether it offers catering or banquet service for group events. "
+            "block evaluating the requirement. Each item must be one required fact "
+            "named in the requirement that verified claims never established. "
             "Do not list a fact already established by verified claims. "
             "Do not request more detail or a different source to reconfirm an established "
             "fact. Empty list when sufficient=true. "
         ),
-        max_length=3,
+        max_length=5,
     )
     reason: str = Field(
         default="",
         description=(
             "Always explain the sufficiency decision. When sufficient=true, cite "
             "which verified claims cover the requirement and why that is enough "
-            "to evaluate it. When sufficient=false, cite which of those three "
-            "facts are still missing from the verified claims. "
+            "to evaluate it. When sufficient=false, cite which required facts "
+            "are still missing from the verified claims. "
         ),
     )
 

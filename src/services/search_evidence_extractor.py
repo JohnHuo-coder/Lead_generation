@@ -310,7 +310,6 @@ def _resolve_evidence_to_batch(
 def extract_evidence_from_search_batch(
     *,
     company: str,
-    collaboration_intent: str,
     requirement: str,
     search_query: str,
     search_focus: str,
@@ -324,7 +323,6 @@ def extract_evidence_from_search_batch(
         SystemMessage(content=SEARCH_BATCH_EVIDENCE_PROMPT),
         HumanMessage(content=(
             f"Company: {company}\n"
-            f"Collaboration intent: {collaboration_intent}\n"
             f"Requirement: {requirement}\n"
             f"Search focus for this batch: {search_focus}\n"
             f"Search query for this batch: {search_query}\n\n"

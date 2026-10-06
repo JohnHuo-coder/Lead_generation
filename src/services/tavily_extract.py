@@ -7,7 +7,7 @@ def extract_page_content(url: str) -> str:
     response = tavily_client.extract(
         urls=[url],
         extract_depth="advanced",
-        format="text",
+        format="markdown",
     )
     results = response.get("results") or []
     if results:

@@ -8,13 +8,23 @@ from langchain.agents.middleware import (
 )
 from collections.abc import Callable
 
-from components.state import ResearchState, FitScoreState, ResearchAgentState
+from components.state import (
+    OverallState,
+    ResearchState,
+    FitScoreInput,
+    FitScoreUpdate,
+    ResearchAgentState,
+    RFPInput,
+    RFPUpdate,
+    TestResearchInput,
+)
 from schemas.research_schemas import ResearchResult
+from schemas.test_research_schemas import TestResearchResult
 from schemas.fit_scoring_schemas import FitScoreResult
 from components.constants import MAX_SEARCH_CALLS
 from components.tools import research_search
+from prompts.fit_scoring import FIT_SCORING_SYSTEM_PROMPT
 from prompts.system_prompts import (
-    FIT_SCORING_SYSTEM_PROMPT,
     RESEARCH_AGENT_SYSTEM_PROMPT,
     RESEARCH_FINAL_HUMAN_REMINDER,
     RESEARCH_FINAL_SYSTEM_PROMPT,
@@ -23,6 +33,9 @@ from llm.models import (
     llm,
     structured_fit_score_llm,
 )
+from schemas.rfp_schemas import RfpResult
+from services.rfp_agent import get_rfp_agent
+from services.test_research_agent import get_test_research_agent, research_tool_counts
 
 
 @wrap_model_call
@@ -82,14 +95,12 @@ def search_node(state: ResearchState) -> dict:
         {"messages": [
             HumanMessage(content=(
                 f"Company: {state['company']}\n"
-                f"Collaboration intent: {state['collaboration_intent']}\n"
                 f"Requirement: {state['requirement']}"
             ))],
             "tool_call_count": 0,
             "search_documents": {},
             "search_queries_used": [],
             "company": state["company"],
-            "collaboration_intent": state["collaboration_intent"],
             "requirement": state["requirement"],
             "verified_evidence": [],
             "failed_evidence_checks": [],
@@ -132,13 +143,17 @@ def search_node(state: ResearchState) -> dict:
         "evidence_full_page_extracts": result.get("evidence_full_page_extracts", 0),
     }
 
+def search_to_fit_score(state: OverallState):
+    """Route to fit scoring only when the property gathered enough information."""
+    if state.get("sufficient"):
+        return "fit_scoring"
+    return "END"
 
-def fit_score_node(state: ResearchState) -> FitScoreState:
+def fit_scoring_node(state: FitScoreInput) -> FitScoreUpdate:
     result: FitScoreResult = structured_fit_score_llm.invoke([
         SystemMessage(content=FIT_SCORING_SYSTEM_PROMPT),
         HumanMessage(content=(
             f"Company: {state['company']}\n"
-            f"Collaboration intent: {state['collaboration_intent']}\n"
             f"Requirement: {state['requirement']}\n"
             f"Verified evidence:\n" + "\n".join(
                 f"- {e.claim}"
@@ -147,16 +162,86 @@ def fit_score_node(state: ResearchState) -> FitScoreState:
         )),
     ])
     return {
+        "fit_passed": result.passed,
         "fit_score": result.score,
-        "reason": result.reason,
-        "supporting_facts": result.supporting_facts,
+        "fit_reason": result.reason,
     }
 
 
-def check_qualified(state: FitScoreState):
-    """Determine if the company is qualified for the requirement based on the fit score."""
-    fit_score = state.get("fit_score", 0)
-    if fit_score >= 75:
+async def test_research_node(state: TestResearchInput) -> dict:
+    agent = await get_test_research_agent()
+    result = await agent.ainvoke(
+        {
+            "messages": [
+                HumanMessage(content=(
+                    f"Company: {state['company']}\n"
+                    f"Requirement: {state['requirement']}"
+                ))
+            ],
+            "company": state["company"],
+            "requirement": state["requirement"],
+            "search_documents": {},
+            "inspected_urls": {},
+            "verified_evidence": [],
+            "failed_evidence": [],
+            "verifier_judgments": [],
+            "search_queries_used": [],
+            "web_search_count": 0,
+        },
+        config={"recursion_limit": 48},
+    )
+    structured: TestResearchResult = result["structured_response"]
+    counts = research_tool_counts(result.get("messages") or [])
+    return {
+        "verified_evidence": result.get("verified_evidence", []),
+        "failed_evidence": result.get("failed_evidence", []),
+        "verifier_judgments": result.get("verifier_judgments", []),
+        "sufficient": structured.sufficient,
+        "additional_evidence_needed": structured.additional_evidence_needed,
+        "sufficient_reason": structured.reason,
+        "search_documents": result.get("search_documents", {}),
+        "search_queries_used": result.get("search_queries_used", []),
+        "search_tool_call_count": counts["web_search"],
+        "inspect_tool_call_count": counts["inspect_web_page"],
+        "write_evidence_tool_call_count": counts["write_evidence"],
+        "think_tool_call_count": counts["think_tool"],
+    }
+
+
+async def find_RFP_node(state: RFPInput) -> RFPUpdate:
+    agent = await get_rfp_agent()
+    website = (state.get("company_website") or "").strip()
+    result = await agent.ainvoke(
+        {
+            "messages": [
+                HumanMessage(content=(
+                    f"Hotel: {state['company']}\n"
+                    f"Official website: {website or 'unknown'}"
+                ))
+            ],
+            "fallback_email": None,
+        },
+        config={"recursion_limit": 32},
+    )
+    structured: RfpResult = result["structured_response"]
+    return {
+        "rfp_url": structured.rfp_url,
+        "rfp_summary": structured.summarization,
+        "fallback_email": result.get("fallback_email"),
+    }
+
+
+def fit_score_to_contact_discovery(state: OverallState):
+    """Route to contact discovery only when the property passed the requirement."""
+    if state.get("fit_passed"):
         return "contact_discovery"
-    else:
-        return "END"
+    return "END"
+
+
+def contact_discovery_node(state: FitScoreInput) -> FitScoreUpdate:
+    
+    return {
+        "passed": result.passed,
+        "fit_score": result.score,
+        "reason": result.reason,
+    }

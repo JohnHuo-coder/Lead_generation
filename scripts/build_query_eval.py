@@ -1099,7 +1099,6 @@ def main() -> int:
         },
         "raw_states": str(RAW_PATH.as_posix()),
         "requirement": requirement,
-        "collaboration_intent": raw["inputs"][0]["collaboration_intent"],
         "n_companies": len(company_rows),
         "n_samples": len(samples),
         "outcome_counts": dict(outcome_counts),
