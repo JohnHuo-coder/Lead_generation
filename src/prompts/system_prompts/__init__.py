@@ -13,7 +13,6 @@ import os
 from importlib import import_module
 
 from prompts.system_prompts.shared import (
-    EXCERPT_DERIVATION_SYSTEM_PROMPT,
     RESEARCH_FINAL_HUMAN_REMINDER,
     VERIFICATION_SYSTEM_PROMPT,
 )

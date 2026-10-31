@@ -12,8 +12,8 @@ After each research_search, do this in order — review first, search second:
 2. Decide whether that combined list is already enough to evaluate the requirement
    (POSITIVE or NEGATIVE path below).
 3. If yes, stop: do not call research_search again. Call the ResearchResult
-   tool with sufficient, additional_evidence_needed, and reason. That tool call
-   is the end of research.
+   tool with sufficient, satisfied, additional_evidence_needed, and reason.
+   That tool call is the end of research.
 4. If no, write the next search_focus as a fact that is not in the verified list,
    then call research_search once.
 
@@ -50,9 +50,15 @@ Rules:
   does not exist
 - do not treat 'not found' as evidence that the requirement is false; searches returning
   nothing is not a negative claim
-- In your final response, return sufficient, additional_evidence_needed, and reason.
-- Base the sufficiency decision only on the verified claims. Explain the decision
-  in reason, and list any facts still needed in additional_evidence_needed.
+- In your final response, return sufficient, satisfied, additional_evidence_needed,
+  and reason.
+- sufficient=true and satisfied=true: POSITIVE path, claims show the company meets
+  the requirement
+- sufficient=true and satisfied=false: NEGATIVE path, claims show it does not
+- sufficient=false and satisfied=null: evidence is not enough to decide.
+  Do not set satisfied when sufficient=false.
+- Base the decision only on the verified claims. Explain it in reason, and list
+  any facts still needed in additional_evidence_needed.
   Follow the field descriptions for what belongs in each field.
 """
 
@@ -61,6 +67,7 @@ The web search budget is exhausted. You cannot search again.
 
 Your only task now is to call the ResearchResult tool once with exactly these fields:
 - sufficient: boolean
+- satisfied: boolean or null
 - additional_evidence_needed: list of strings
 - reason: string
 
@@ -69,20 +76,21 @@ Rules:
 - do NOT call research_search
 - do NOT return evidence items; they were already collected during search
 - base your decision only on verified evidence already reported in tool results
-- if important information is still missing, set sufficient=false; list only the
-  missing required amenities in additional_evidence_needed (each item is one amenity
-  named in the requirement that verified claims never established as on-site);
+- if important information is still missing, set sufficient=false and satisfied=null;
+  list only the missing required amenities in additional_evidence_needed (each item
+  is one amenity named in the requirement that verified claims never established
+  as on-site);
   in reason, say which of those amenities the verified claims never stated
 - if the collected evidence is enough to evaluate the requirement, set sufficient=true,
-  return an empty additional_evidence_needed list, and explain in reason which verified
-  claims cover the requirement and why that is enough to evaluate it
-- sufficient=true has exactly two valid paths. POSITIVE: verified claims cover every
-  amenity named in the requirement as the property's own on-site facility.
-  NEGATIVE: a verified claim states the property does not offer a required amenity
-  on site.
+  return an empty additional_evidence_needed list, set satisfied from the path below,
+  and explain in reason which verified claims show the company meets or does not meet
+  the requirement
+- sufficient=true has exactly two valid paths. POSITIVE (satisfied=true): verified
+  claims cover every amenity named in the requirement as the property's own on-site
+  facility. NEGATIVE (satisfied=false): a verified claim states the property does
+  not offer a required amenity on site.
 - a nearby, partner, or off-site facility never satisfies either path
 - a guest-conduct or house-rules statement never satisfies either path
-- do not decide whether the company qualifies
 """
 
 QUERY_GENERATOR_SYSTEM_PROMPT = """

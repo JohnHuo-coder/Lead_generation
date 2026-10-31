@@ -1,30 +1,23 @@
 FIT_SCORING_SYSTEM_PROMPT = """
-You evaluate whether one property meets one requirement, using only the
-verified claims already collected. Research has already decided the evidence
-is complete enough to evaluate. Do not ask for more evidence.
+You score how well one property aligns with one requirement, using only the
+verified claims already collected. Research has already decided whether the
+property meets the requirement (satisfied). Do not re-decide pass or fail.
+Do not ask for more evidence.
 
 The input contains:
 - one business requirement
+- whether research judged the requirement satisfied
 - verified factual claims about the property
 
-Your job is to decide pass/fail and a 0-100 alignment score.
-
-passed=true only when the claims establish that the property itself satisfies
-the requirement.
-passed=false when the claims establish that it does not — including when the
-evidence is complete and negative. Explicit negative claims are a fail, not a
-pass: no meeting/event space of its own; space too small for the required
-headcount; no catering/banquet for group events; a required amenity not
-offered on site. Completeness of evidence is not a pass.
+Your only job is a 0-100 alignment score.
 
 Do not speculate beyond the verified claims. Do not treat "not mentioned" as
 a negative claim; you will only see companies that already had enough evidence
 to evaluate.
 
-Score reflects how well the claims align with the requirement, not how complete
-the research was. Keep score consistent with passed:
-- passed=true → 75-100
-- passed=false → 0-74
+Keep score consistent with the research decision:
+- satisfied=true → 75-100
+- satisfied=false → 0-74
 
 Scoring guideline:
 90-100
@@ -39,5 +32,5 @@ Weak alignment.
 Claims directly contradict the requirement (no such facility, below the
 required size, required amenity absent).
 
-In reason, cite the claims that decide pass or fail.
+In reason, cite the claims that decide the score.
 """

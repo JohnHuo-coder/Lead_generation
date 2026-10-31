@@ -39,10 +39,6 @@ def _build_pipeline_stats(state: dict[str, Any]) -> dict[str, int]:
         "batch_result_id_match_failures": int(
             state.get("batch_result_id_match_failures", 0) or 0
         ),
-        "excerpt_derivation_checks": int(state.get("excerpt_derivation_checks", 0) or 0),
-        "evidence_full_snippet_verifications": int(
-            state.get("evidence_full_snippet_verifications", 0) or 0
-        ),
         "evidence_full_page_extracts": int(
             state.get("evidence_full_page_extracts", 0) or 0
         ),
@@ -51,6 +47,7 @@ def _build_pipeline_stats(state: dict[str, Any]) -> dict[str, int]:
 
 def _format_research_output(state: dict[str, Any], *, verbose: bool = False) -> dict[str, Any]:
     output: dict[str, Any] = {
+        "verified_claims": list(state.get("verified_claims") or []),
         "verified_evidence": [
             _serialize_item(item) for item in state.get("verified_evidence") or []
         ],

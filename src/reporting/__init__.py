@@ -2,6 +2,7 @@ from reporting.research_report import (
     build_batch_summary,
     build_run_report,
     export_batch_summary_html,
+    export_research_eval_jsons,
     format_batch_summary,
     format_run_report,
     render_batch_summary_html,
@@ -14,4 +15,5 @@ __all__ = [
     "format_batch_summary",
     "render_batch_summary_html",
     "export_batch_summary_html",
+    "export_research_eval_jsons",
 ]

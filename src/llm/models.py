@@ -3,23 +3,18 @@ import os
 from dotenv import load_dotenv
 from langchain_openai import ChatOpenAI
 from schemas.research_schemas import (
-    ExcerptDerivationResult,
+    DomainSkillChoice,
     QueryGeneratorResult,
     SearchBatchEvidenceResult,
     UrlSelectorResult,
     VerifyResult,
 )
 from schemas.fit_scoring_schemas import FitScoreResult
-from schemas.test_research_schemas import PageEvidenceResult, TestVerifyResult
 
 load_dotenv()
 
 # Agent + structured research steps (override via .env).
 RESEARCH_LLM_MODEL = os.getenv("RESEARCH_LLM_MODEL", "gpt-5-mini")
-RESEARCH_DERIVATION_LLM_MODEL = os.getenv(
-    "RESEARCH_DERIVATION_LLM_MODEL",
-    "gpt-5-nano",
-)
 
 llm = ChatOpenAI(model=RESEARCH_LLM_MODEL)
 
@@ -35,22 +30,14 @@ structured_query_generator_llm = ChatOpenAI(
     model=RESEARCH_LLM_MODEL,
 ).with_structured_output(QueryGeneratorResult)
 
+structured_skill_choice_llm = ChatOpenAI(
+    model=RESEARCH_LLM_MODEL,
+).with_structured_output(DomainSkillChoice)
+
 structured_verification_llm = ChatOpenAI(
     model=RESEARCH_LLM_MODEL,
 ).with_structured_output(VerifyResult)
 
-structured_excerpt_derivation_llm = ChatOpenAI(
-    model=RESEARCH_DERIVATION_LLM_MODEL,
-).with_structured_output(ExcerptDerivationResult)
-
 structured_fit_score_llm = ChatOpenAI(
     model=RESEARCH_LLM_MODEL,
 ).with_structured_output(FitScoreResult)
-
-structured_test_research_extract_llm = ChatOpenAI(
-    model=RESEARCH_LLM_MODEL,
-).with_structured_output(PageEvidenceResult)
-
-structured_test_research_verify_llm = ChatOpenAI(
-    model=RESEARCH_LLM_MODEL,
-).with_structured_output(TestVerifyResult)

@@ -1,5 +1,12 @@
 from db.db import pool
 
+
+def _field(item, name, default=None):
+    if isinstance(item, dict):
+        return item.get(name, default)
+    return getattr(item, name, default)
+
+
 def upsert_initial_candidates(item):
     with pool.connection as conn:
         with conn.cursor() as cur:
@@ -36,13 +43,13 @@ def upsert_initial_candidates(item):
 
             """
             cur.execute(sql, {
-                "place_id": item.place_id,
-                "company_name": item.company_name,
-                "website": item.website,
-                "phone": item.phone,
-                "distance_from_center": item.distance_from_center,
-                "stars": item.stars,
-                "description": item.description
+                "place_id": _field(item, "place_id"),
+                "company_name": _field(item, "company_name"),
+                "website": _field(item, "website"),
+                "phone": _field(item, "phone"),
+                "distance_from_center": _field(item, "distance_from_center"),
+                "stars": _field(item, "stars"),
+                "description": _field(item, "description"),
             })
 
             return cur.fetchone()["id"]

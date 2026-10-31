@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import html
+import json
 from collections import Counter
 from datetime import datetime, timezone
 from pathlib import Path
@@ -20,7 +21,8 @@ FAILURE_REASON_LABELS = {
     "invalid_result_id": "Invalid result_id",
     "excerpt_not_found": "Excerpt not found in source",
     "page_extract_failed": "Full-page extract failed",
-    "claim_not_supported": "Claim not supported by excerpts",
+    "not_about_company": "Claim is not about the target company",
+    "claim_not_supported": "Claim not supported by source",
 }
 
 PIPELINE_STAT_FIELDS = (
@@ -32,8 +34,6 @@ PIPELINE_STAT_FIELDS = (
     "url_selector_extract_attempts",
     "url_selector_full_page_extracts",
     "url_selector_extract_failures",
-    "excerpt_derivation_checks",
-    "evidence_full_snippet_verifications",
     "evidence_full_page_extracts",
 )
 
@@ -46,8 +46,6 @@ PIPELINE_STAT_LABELS = {
     "url_selector_extract_attempts": "URL selector extract attempts (search)",
     "url_selector_full_page_extracts": "URL selector full-page extracts (search)",
     "url_selector_extract_failures": "URL selector extract failures (search)",
-    "excerpt_derivation_checks": "Excerpt derivation LLM checks (excerpt)",
-    "evidence_full_snippet_verifications": "Full snippet verifications (evidence)",
     "evidence_full_page_extracts": "Full-page extracts (evidence)",
 }
 
@@ -89,6 +87,84 @@ def _average_pipeline_stats(
         field: totals.get(field, 0) / company_count
         for field in PIPELINE_STAT_FIELDS
     }
+
+
+def _binary_classification_metrics(
+    golds: list[bool],
+    preds: list[bool],
+) -> dict[str, float | int | None]:
+    tp = fp = tn = fn = 0
+    for gold, pred in zip(golds, preds, strict=True):
+        if gold and pred:
+            tp += 1
+        elif not gold and pred:
+            fp += 1
+        elif not gold and not pred:
+            tn += 1
+        else:
+            fn += 1
+    total = tp + fp + tn + fn
+    precision = tp / (tp + fp) if (tp + fp) else None
+    recall = tp / (tp + fn) if (tp + fn) else None
+    if precision is not None and recall is not None and (precision + recall):
+        f1 = 2 * precision * recall / (precision + recall)
+    else:
+        f1 = None
+    return {
+        "n": total,
+        "tp": tp,
+        "fp": fp,
+        "tn": tn,
+        "fn": fn,
+        "accuracy": (tp + tn) / total if total else None,
+        "precision": precision,
+        "recall": recall,
+        "f1": f1,
+    }
+
+
+def _gold_for_company(
+    gold_by_company: dict[str, dict[str, Any]] | None,
+    company: str | None,
+) -> dict[str, Any]:
+    if not gold_by_company or not company:
+        return {}
+    return gold_by_company.get(company) or {}
+
+
+def _classification_metrics_from_runs(
+    run_reports: list[dict[str, Any]],
+) -> dict[str, dict[str, float | int | None]]:
+    sufficient_golds: list[bool] = []
+    sufficient_preds: list[bool] = []
+    satisfied_golds: list[bool] = []
+    satisfied_preds: list[bool] = []
+
+    for report in run_reports:
+        gold_sufficient = report.get("gold_sufficient")
+        if gold_sufficient is None:
+            continue
+        sufficient_golds.append(bool(gold_sufficient))
+        sufficient_preds.append(report.get("sufficient") is True)
+
+        if gold_sufficient is not True:
+            continue
+        gold_satisfied = report.get("gold_satisfied")
+        if gold_satisfied is None:
+            continue
+        satisfied_golds.append(bool(gold_satisfied))
+        satisfied_preds.append(report.get("satisfied") is True)
+
+    metrics: dict[str, dict[str, float | int | None]] = {}
+    if sufficient_golds:
+        metrics["sufficient"] = _binary_classification_metrics(
+            sufficient_golds, sufficient_preds
+        )
+    if satisfied_golds:
+        metrics["satisfied"] = _binary_classification_metrics(
+            satisfied_golds, satisfied_preds
+        )
+    return metrics
 
 
 def _serialize_evidence(item: Any) -> dict:
@@ -146,6 +222,7 @@ def build_run_report(state: dict[str, Any]) -> dict[str, Any]:
         "company": state.get("company"),
         "requirement": state.get("requirement"),
         "sufficient": state.get("sufficient"),
+        "satisfied": state.get("satisfied"),
         "sufficient_reason": state.get("sufficient_reason") or "",
         "search_tool_call_count": state.get("search_tool_call_count", 0),
         "additional_evidence_needed": state.get("additional_evidence_needed") or [],
@@ -180,6 +257,7 @@ def build_run_report(state: dict[str, Any]) -> dict[str, Any]:
 def build_batch_summary(
     inputs: list[dict[str, Any]],
     results: list[Any],
+    gold_by_company: dict[str, dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
     run_reports: list[dict[str, Any]] = []
     errors: list[dict[str, Any]] = []
@@ -197,6 +275,11 @@ def build_batch_summary(
             continue
 
         report = build_run_report(result)
+        gold = _gold_for_company(gold_by_company, report.get("company") or company)
+        if "sufficient" in gold:
+            report["gold_sufficient"] = gold.get("sufficient")
+        if "satisfied" in gold:
+            report["gold_satisfied"] = gold.get("satisfied")
         run_reports.append(report)
 
     total_runs = len(results)
@@ -262,6 +345,7 @@ def build_batch_summary(
         },
         "runs": run_reports,
         "errors": errors,
+        "classification_metrics": _classification_metrics_from_runs(run_reports),
     }
 
 
@@ -269,6 +353,7 @@ def format_run_report(report: dict[str, Any]) -> str:
     lines = [
         f"Company: {report['company']}",
         f"Sufficient: {report['sufficient']}",
+        f"Satisfied: {report.get('satisfied')}",
         f"Search tool calls: {report['search_tool_call_count']}",
         f"Evidence total: {report['evidence_total']}",
         f"Verified: {report['verified_count']}",
@@ -341,6 +426,8 @@ def format_batch_summary(summary: dict[str, Any]) -> str:
             f"Average tool call count: {summary['average_tool_call_count']:.1f}"
         )
 
+    lines.extend(_format_classification_metrics(summary.get("classification_metrics") or {}))
+
     pipeline_stats = summary.get("pipeline_stats") or {}
     pipeline_stats_averages = summary.get("pipeline_stats_averages") or {}
     if any(pipeline_stats.values()) or any(
@@ -387,6 +474,39 @@ def format_batch_summary(summary: dict[str, Any]) -> str:
             )
 
     return "\n".join(lines)
+
+
+def _format_classification_metrics(
+    metrics: dict[str, dict[str, float | int | None]],
+) -> list[str]:
+    if not metrics:
+        return []
+    labels = {
+        "sufficient": (
+            "Sufficient vs insufficient (positive = sufficient)"
+        ),
+        "satisfied": (
+            "Satisfied vs unsatisfied among gold-sufficient "
+            "(positive = satisfied)"
+        ),
+    }
+    lines = ["Classification vs gold labels:"]
+    for key in ("sufficient", "satisfied"):
+        block = metrics.get(key)
+        if not block:
+            continue
+        lines.append(f"  {labels[key]}:")
+        lines.append(
+            f"    n={block['n']} tp={block['tp']} fp={block['fp']} "
+            f"tn={block['tn']} fn={block['fn']}"
+        )
+        lines.append(
+            f"    accuracy={_format_rate(block.get('accuracy'))} "
+            f"precision={_format_rate(block.get('precision'))} "
+            f"recall={_format_rate(block.get('recall'))} "
+            f"f1={_format_rate(block.get('f1'))}"
+        )
+    return lines
 
 
 def _escape(value: Any) -> str:
@@ -436,6 +556,49 @@ def _render_additional_evidence_block(items: list[str]) -> str:
         + "".join(f"<li>{_escape(item)}</li>" for item in items)
         + "</ul>"
     )
+
+
+def _render_classification_metrics_html(
+    metrics: dict[str, dict[str, float | int | None]],
+) -> str:
+    if not metrics:
+        return ""
+    sections = [
+        (
+            "sufficient",
+            "Sufficient vs insufficient",
+            "Positive = sufficient (whether or not the requirement is satisfied). "
+            "Negative = insufficient.",
+        ),
+        (
+            "satisfied",
+            "Satisfied vs unsatisfied (gold-sufficient only)",
+            "Evaluated only on companies labeled sufficient in gold. "
+            "Positive = satisfied. Negative = unsatisfied. "
+            "A predicted insufficient or unknown satisfied counts as negative.",
+        ),
+    ]
+    blocks: list[str] = ["<h2>Classification vs Gold Labels</h2>"]
+    for key, heading, note in sections:
+        block = metrics.get(key)
+        if not block:
+            continue
+        blocks.append(f"<h3>{_escape(heading)}</h3>")
+        blocks.append(f"<p class='muted'>{_escape(note)}</p>")
+        blocks.append(
+            "<div class='summary-grid'>"
+            f"<div class='metric'><span>N</span><strong>{block.get('n', 0)}</strong></div>"
+            f"<div class='metric'><span>TP</span><strong>{block.get('tp', 0)}</strong></div>"
+            f"<div class='metric'><span>FP</span><strong>{block.get('fp', 0)}</strong></div>"
+            f"<div class='metric'><span>TN</span><strong>{block.get('tn', 0)}</strong></div>"
+            f"<div class='metric'><span>FN</span><strong>{block.get('fn', 0)}</strong></div>"
+            f"<div class='metric'><span>Accuracy</span><strong>{_format_rate(block.get('accuracy'))}</strong></div>"
+            f"<div class='metric'><span>Precision</span><strong>{_format_rate(block.get('precision'))}</strong></div>"
+            f"<div class='metric'><span>Recall</span><strong>{_format_rate(block.get('recall'))}</strong></div>"
+            f"<div class='metric'><span>F1</span><strong>{_format_rate(block.get('f1'))}</strong></div>"
+            "</div>"
+        )
+    return "\n".join(blocks)
 
 
 def _render_insufficient_runs_table(reports: list[dict[str, Any]]) -> str:
@@ -550,6 +713,7 @@ def _render_evidence_card(
         f"<div><strong>URL:</strong> <a href='{_escape(evidence.get('url'))}' target='_blank' rel='noopener noreferrer'>{_escape(evidence.get('url'))}</a></div>"
         f"<div><strong>Reason:</strong> {_escape(evidence.get('reason'))}</div>"
         f"<div><strong>Source excerpts:</strong>{_render_excerpt_list(evidence.get('source_excerpts') or [])}</div>"
+        f"<div><strong>Supporting passages:</strong>{_render_excerpt_list(evidence.get('supporting_passages') or [])}</div>"
         f"{_render_source_content_block(evidence.get('source_content') or '')}"
         f"{extra_fields}"
         "</div>"
@@ -563,6 +727,13 @@ def _render_run_report_html(report: dict[str, Any]) -> str:
     )
     sufficient_text = (
         "Yes" if sufficient is True else "No" if sufficient is False else "Unknown"
+    )
+    satisfied = report.get("satisfied")
+    satisfied_class = (
+        "badge-yes" if satisfied is True else "badge-no" if satisfied is False else "badge-unknown"
+    )
+    satisfied_text = (
+        "Yes" if satisfied is True else "No" if satisfied is False else "n/a"
     )
 
     verified_items = "".join(
@@ -638,6 +809,7 @@ def _render_run_report_html(report: dict[str, Any]) -> str:
   <p class="muted">{_escape(report.get('requirement'))}</p>
   <div class="metrics">
     <div class="metric"><span>Sufficient</span><strong class="{sufficient_class}">{sufficient_text}</strong></div>
+    <div class="metric"><span>Satisfied</span><strong class="{satisfied_class}">{satisfied_text}</strong></div>
     <div class="metric"><span>Search tool calls</span><strong>{report.get('search_tool_call_count', 0)}</strong></div>
     <div class="metric"><span>Evidence total</span><strong>{report.get('evidence_total', 0)}</strong></div>
     <div class="metric"><span>Verified</span><strong>{report.get('verified_count', 0)}</strong></div>
@@ -872,6 +1044,8 @@ def render_batch_summary_html(summary: dict[str, Any], *, title: str = "Research
       </tbody>
     </table>
 
+    {_render_classification_metrics_html(summary.get('classification_metrics') or {})}
+
     {error_section}
 
     {_render_insufficient_runs_table(summary.get('runs', []))}
@@ -897,3 +1071,84 @@ def export_batch_summary_html(
         encoding="utf-8",
     )
     return path
+
+
+RESEARCH_EVAL_FIELDS = (
+    "query_generator_decisions",
+    "url_selector_decisions",
+    "evidence_extractor_decisions",
+    "verifier_judgments",
+    "unclear_ownership_judgments",
+    "research_agent_steps",
+)
+
+
+def _serialize_eval_value(item: Any) -> Any:
+    if isinstance(item, BaseModel):
+        return item.model_dump()
+    if isinstance(item, dict):
+        return {key: _serialize_eval_value(value) for key, value in item.items()}
+    if isinstance(item, list):
+        return [_serialize_eval_value(value) for value in item]
+    return item
+
+
+def export_research_eval_jsons(
+    inputs: list[dict[str, Any]],
+    results: list[Any],
+    output_dir: str | Path,
+) -> dict[str, Path]:
+    directory = Path(output_dir)
+    directory.mkdir(parents=True, exist_ok=True)
+    written: dict[str, Path] = {}
+
+    eval_payloads = {field: [] for field in RESEARCH_EVAL_FIELDS}
+    outcomes: list[dict[str, Any]] = []
+
+    for index, result in enumerate(results):
+        company = inputs[index].get("company") if index < len(inputs) else None
+        if isinstance(result, Exception):
+            error = {
+                "company": company,
+                "error": f"{type(result).__name__}: {result}",
+            }
+            for field in RESEARCH_EVAL_FIELDS:
+                eval_payloads[field].append(error)
+            outcomes.append(error)
+            continue
+
+        for field in RESEARCH_EVAL_FIELDS:
+            eval_payloads[field].append(
+                {
+                    "company": company,
+                    field: _serialize_eval_value(result.get(field) or []),
+                }
+            )
+        outcomes.append(
+            {
+                "company": company,
+                "sufficient": result.get("sufficient"),
+                "satisfied": result.get("satisfied"),
+                "sufficient_reason": result.get("sufficient_reason") or "",
+                "verified_claims": list(result.get("verified_claims") or []),
+                "verified_evidence": _serialize_eval_value(
+                    result.get("verified_evidence") or []
+                ),
+            }
+        )
+
+    for field, payload in eval_payloads.items():
+        path = directory / f"{field}.json"
+        path.write_text(
+            json.dumps(payload, ensure_ascii=False, indent=2),
+            encoding="utf-8",
+        )
+        written[field] = path
+
+    outcome_path = directory / "research_outcomes.json"
+    outcome_path.write_text(
+        json.dumps(outcomes, ensure_ascii=False, indent=2),
+        encoding="utf-8",
+    )
+    written["research_outcomes"] = outcome_path
+    return written

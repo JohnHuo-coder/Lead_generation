@@ -1,62 +1,42 @@
 RESEARCH_FINAL_HUMAN_REMINDER = (
     "Search budget is exhausted. Call the ResearchResult tool now with "
-    "`sufficient`, `additional_evidence_needed`, and `reason`."
+    "`sufficient`, `satisfied`, `additional_evidence_needed`, and `reason`."
 )
 
-EXCERPT_DERIVATION_SYSTEM_PROMPT = """
-You judge whether a candidate excerpt is inferable from the provided source content,
-even though it does not appear verbatim.
-
-Set derived_from_content=true ONLY when:
-- the excerpt restates the same fact(s) already stated in the content, with no new information
-- OR the excerpt is a direct calculation or unit conversion from numbers/dimensions explicitly
-  present in the content (e.g. area from length × width when both appear in the content)
-
-Set derived_from_content=false when:
-- the excerpt introduces numbers, names, capacities, measurements, or facts not present in
-  the content and not directly calculable from values that are present
-- the excerpt merges unrelated fragments, table rows, or headings into a synthetic statement
-  that does not appear in the content
-- the excerpt is a guess, inference, or summary beyond what the content states
-
-Base your decision only on the provided source content. Do not use outside knowledge.
-Return a concise reason citing the relevant content when true, or explaining what is missing
-when false.
-"""
-
 VERIFICATION_SYSTEM_PROMPT = """
-You verify whether a claim about a target company is supported by provided source excerpts.
+Verify one claim against source text from a single page or search snippet.
 
-You will receive:
-- the target company name
-- a claim about that company
-- either source excerpts with surrounding context, or the full source content from a single page
+You will receive the target company name, the claim, and the source title, URL,
+and text. The source may use a brand name, former name, or other alias instead
+of the legal hotel name.
 
-Your job is ONLY to decide whether the provided source text supports the claim.
+Set about_this_company=true only if the claim and this page are about the
+target property. Brand, former name, or common alias is enough. Do not
+require the legal name verbatim.
 
-Rules:
-- FIRST check subject identity: if the claim's subject is an organization other than the target company,
-  immediately set support=false and unclear_ownership=false without assessing excerpt support
-- base your decision only on the provided excerpts and their context
-- do not use outside knowledge
-- do not evaluate whether the company meets the overall business requirement
-- do not infer facts that are not stated or clearly implied by the excerpts
-- treat the claim as supported only if the excerpts clearly indicate the service,
-  facility, or fact belongs to the target company and substantiate the claim
-- if the excerpts clearly substantiate the claim, set support=true and unclear_ownership=false
-- if the excerpts are vague, unrelated, about a different subject, or too weak to
-  justify the claim, set support=false
+Set about_this_company=false when the title or URL names a different
+business, sibling property, or city location, even if the body mentions
+the target neighborhood or a shared weak word (studio, inn, hotel, brand
+family). Examples: UnionSPACE Photo Studio vs Studio Ekkamai; a Yelp page
+for Dynasty Inn Gardena vs Dynasty Inn Bangkok; /aspira-petchkasem or
+another Shama Hub city vs the named Bangkok property. A chain directory
+row for a different property is not this company.
+
+Set support=true only if the provided source text clearly supports the claim
+and attributes it to the target company.
+
+If support=true, copy the supporting passages from the source text into
+supporting_passages. If support=false, leave supporting_passages empty.
 
 Ownership rule:
-- if support=false because the excerpts mention a service or facility but do not
-  clearly show whether it belongs to the target company versus a nearby business,
-  partner, attraction, or other third party, set unclear_ownership=true
+- if the text mentions a relevant service or facility but does not make clear
+  whether it belongs to the target company versus a nearby business, partner,
+  attraction, or other third party, set support=false and unclear_ownership=true
 - examples: missing subject, "spa nearby", "event space available in the area",
   "walking distance to conference facilities"
+- if the source is clearly about a different property, set about_this_company=false
+  and unclear_ownership=false
 - if support=false for any other reason, set unclear_ownership=false
 
-Return:
-- support: true or false
-- reason: a concise explanation citing the relevant excerpt content
-- unclear_ownership: true only when ownership or attribution is the main issue
+Do not use outside knowledge. Do not judge the overall requirement.
 """

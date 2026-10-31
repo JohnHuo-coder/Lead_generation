@@ -13,8 +13,8 @@ After each research_search, do this in order — review first, search second:
 2. Decide whether that combined list is already enough to evaluate the requirement
    (POSITIVE or NEGATIVE path below).
 3. If yes, stop: do not call research_search again. Call the ResearchResult
-   tool with sufficient, additional_evidence_needed, and reason. That tool call
-   is the end of research.
+   tool with sufficient, satisfied, additional_evidence_needed, and reason.
+   That tool call is the end of research.
 4. If no, write the next search_focus as a fact that is not in the verified list,
    then call research_search once.
 
@@ -50,9 +50,15 @@ Rules:
   are routinely published by properties that do run banquet and meeting business.
 - do not treat 'not found' as evidence that the requirement is false; searches returning
   nothing is not a negative claim
-- In your final response, return sufficient, additional_evidence_needed, and reason.
-- Base the sufficiency decision only on the verified claims. Explain the decision
-  in reason, and list any facts still needed in additional_evidence_needed.
+- In your final response, return sufficient, satisfied, additional_evidence_needed,
+  and reason.
+- sufficient=true and satisfied=true: POSITIVE path, claims show the company meets
+  the requirement
+- sufficient=true and satisfied=false: NEGATIVE path, claims show it does not
+- sufficient=false and satisfied=null: evidence is not enough to decide.
+  Do not set satisfied when sufficient=false.
+- Base the decision only on the verified claims. Explain it in reason, and list
+  any facts still needed in additional_evidence_needed.
   Follow the field descriptions for what belongs in each field.
 """
 
@@ -61,6 +67,7 @@ The web search budget is exhausted. You cannot search again.
 
 Your only task now is to call the ResearchResult tool once with exactly these fields:
 - sufficient: boolean
+- satisfied: boolean or null
 - additional_evidence_needed: list of strings
 - reason: string
 
@@ -69,22 +76,23 @@ Rules:
 - do NOT call research_search
 - do NOT return evidence items; they were already collected during search
 - base your decision only on verified evidence already reported in tool results
-- if important information is still missing, set sufficient=false; list only the
-  missing required facts in additional_evidence_needed (no meeting/event space,
-  no capacity for the required headcount, or no catering/banquet for group events);
+- if important information is still missing, set sufficient=false and satisfied=null;
+  list only the missing required facts in additional_evidence_needed (no meeting/event
+  space, no capacity for the required headcount, or no catering/banquet for group events);
   in reason, say which of those facts the verified claims never stated
 - if the collected evidence is enough to evaluate the requirement, set sufficient=true,
-  return an empty additional_evidence_needed list, and explain in reason which verified
-  claims cover the requirement and why that is enough to evaluate it
-- sufficient=true has exactly two valid paths. POSITIVE: verified claims cover every required
-  component — the property's own meeting or event space, explicit capacity or size
-  showing suitability for the required headcount, and catering or banquet service for group
-  events. NEGATIVE: a verified claim states the property has no meeting or event
-  space of its own or cannot host group events of the required size. 
+  return an empty additional_evidence_needed list, set satisfied from the path below,
+  and explain in reason which verified claims show the company meets or does not meet
+  the requirement
+- sufficient=true has exactly two valid paths. POSITIVE (satisfied=true): verified
+  claims cover every required component — the property's own meeting or event space,
+  explicit capacity or size showing suitability for the required headcount, and
+  catering or banquet service for group events. NEGATIVE (satisfied=false): a verified
+  claim states the property has no meeting or event space of its own, cannot host
+  group events of the required size, or does not provide catering services.
 - a guest-conduct or house-rules statement — parties not allowed, pets, smoking, quiet hours,
   check-in times — never satisfies either path, and is not evidence that meeting/event space or
   catering does or does not exist.
-- do not decide whether the company qualifies
 """
 
 QUERY_GENERATOR_SYSTEM_PROMPT = """

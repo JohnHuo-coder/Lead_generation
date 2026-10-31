@@ -3,7 +3,8 @@ from __future__ import annotations
 from langchain_core.messages import HumanMessage, SystemMessage
 
 from llm.models import structured_url_selector_llm
-from prompts.system_prompts import URL_SELECTOR_SYSTEM_PROMPT
+from prompts.research import URL_SELECTOR_SYSTEM_PROMPT
+from prompts.rules import with_domain_rules
 from schemas.research_schemas import SearchDocument, UrlSelectorResult
 
 
@@ -22,21 +23,22 @@ def _format_candidates(documents: list[SearchDocument]) -> str:
 def select_urls_for_full_extract(
     *,
     company: str,
-    requirement: str,
     search_focus: str,
-    search_query: str,
     candidates: list[SearchDocument],
+    skill_ids: list[str] | None = None,
 ) -> UrlSelectorResult:
     if not candidates:
         return UrlSelectorResult(selections=[])
 
     return structured_url_selector_llm.invoke([
-        SystemMessage(content=URL_SELECTOR_SYSTEM_PROMPT),
+        SystemMessage(
+            content=with_domain_rules(
+                URL_SELECTOR_SYSTEM_PROMPT, skill_ids, "selector"
+            )
+        ),
         HumanMessage(content=(
             f"Company: {company}\n"
-            f"Requirement: {requirement}\n"
-            f"Search focus: {search_focus}\n"
-            f"Search query: {search_query}\n\n"
+            f"Search focus: {search_focus}\n\n"
             f"Candidates:\n{_format_candidates(candidates)}"
         )),
     ])

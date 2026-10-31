@@ -5,13 +5,14 @@ from langchain.agents import AgentState
 from schemas.research_schemas import (
     Evidence,
     EvidenceCheckFailure,
+    EvidenceExtractorDecision,
     OffTargetRejection,
+    QueryGeneratorDecision,
+    ResearchAgentStep,
+    ResearchPlan,
     SearchDocument,
-)
-from schemas.test_research_schemas import (
-    FailedEvidence,
-    TestEvidence,
-    TestSearchDocument,
+    UnclearOwnershipJudgment,
+    UrlSelectorDecision,
     VerifierJudgment,
 )
 
@@ -20,10 +21,16 @@ class OverallState(TypedDict):
     place_id: str
     company: str
     requirement: str
+    positive_when: str
+    negative_when: str
+    does_not_count: list[str]
+    skills: list[str]
 
     sufficient: bool | None
     sufficient_reason: str
     verified_evidence: Annotated[list[Evidence], add]
+    verified_claims: list[str]
+    satisfied: bool | None
 
     fit_passed: bool
     fit_score: int
@@ -41,8 +48,14 @@ class ResearchAgentState(AgentState):
     search_documents: Annotated[dict[str, SearchDocument], or_]
     company: str
     requirement: str
+    positive_when: str
+    negative_when: str
+    does_not_count: list[str]
+    skills: list[str]
     verified_evidence: Annotated[list[Evidence], add]
     failed_evidence_checks: Annotated[list[EvidenceCheckFailure], add]
+    verifier_judgments: Annotated[list[VerifierJudgment], add]
+    unclear_ownership_judgments: Annotated[list[UnclearOwnershipJudgment], add]
     batch_result_id_match_failures: Annotated[int, add]
     off_target_company_rejections: Annotated[int, add]
     off_target_rejections: Annotated[list[OffTargetRejection], add]
@@ -52,30 +65,79 @@ class ResearchAgentState(AgentState):
     url_selector_extract_attempts: Annotated[int, add]
     url_selector_full_page_extracts: Annotated[int, add]
     url_selector_extract_failures: Annotated[int, add]
+    url_selector_decisions: Annotated[list[UrlSelectorDecision], add]
+    query_generator_decisions: Annotated[list[QueryGeneratorDecision], add]
+    evidence_extractor_decisions: Annotated[list[EvidenceExtractorDecision], add]
+    research_agent_steps: Annotated[list[ResearchAgentStep], add]
     search_queries_used: Annotated[list[str], add]
-    excerpt_derivation_checks: Annotated[int, add]
-    evidence_full_snippet_verifications: Annotated[int, add]
     evidence_full_page_extracts: Annotated[int, add]
 
 class ResearchInput(TypedDict):
     company: str
     requirement: str
+    positive_when: str
+    negative_when: str
+    does_not_count: list[str]
+    skills: NotRequired[list[str]]
 
 class ResearchOutput(TypedDict):
+    company: str
+    requirement: str
+    positive_when: str
+    negative_when: str
+    does_not_count: list[str]
+    skills: list[str]
     sufficient: bool
+    satisfied: bool | None
     sufficient_reason: str
+    additional_evidence_needed: list[str]
     verified_evidence: list[Evidence]
+    verified_claims: list[str]
+    failed_evidence_checks: list[EvidenceCheckFailure]
+    verifier_judgments: list[VerifierJudgment]
+    verifier_sample_supported: VerifierJudgment | None
+    verifier_sample_wrong_company: VerifierJudgment | None
+    verifier_sample_unsupported: VerifierJudgment | None
+    unclear_ownership_judgments: list[UnclearOwnershipJudgment]
+    url_selector_decisions: list[UrlSelectorDecision]
+    query_generator_decisions: list[QueryGeneratorDecision]
+    evidence_extractor_decisions: list[EvidenceExtractorDecision]
+    research_agent_steps: list[ResearchAgentStep]
+    search_tool_call_count: int
+    search_documents: dict[str, SearchDocument]
+    search_queries_used: list[str]
+    batch_result_id_match_failures: int
+    off_target_company_rejections: int
+    off_target_rejections: list[OffTargetRejection]
+    duplicate_search_result_skips: int
+    duplicate_claim_skips: int
+    empty_evidence_tool_calls: int
+    url_selector_extract_attempts: int
+    url_selector_full_page_extracts: int
+    url_selector_extract_failures: int
+    evidence_full_page_extracts: int
 
 class ResearchState(TypedDict):
     company: str
     requirement: str
+    positive_when: str
+    negative_when: str
+    does_not_count: list[str]
+    skills: NotRequired[list[str]]
     additional_evidence_needed: NotRequired[list[str]]
     search_documents: Annotated[dict[str, SearchDocument], or_]
 
     failed_evidence_checks: Annotated[list[EvidenceCheckFailure], add]
     verified_evidence: Annotated[list[Evidence], add]
+    verified_claims: list[str]
+    verifier_judgments: Annotated[list[VerifierJudgment], add]
+    verifier_sample_supported: NotRequired[VerifierJudgment | None]
+    verifier_sample_wrong_company: NotRequired[VerifierJudgment | None]
+    verifier_sample_unsupported: NotRequired[VerifierJudgment | None]
+    unclear_ownership_judgments: Annotated[list[UnclearOwnershipJudgment], add]
 
     sufficient: bool | None
+    satisfied: bool | None
     sufficient_reason: str
     search_tool_call_count: int
 
@@ -88,55 +150,16 @@ class ResearchState(TypedDict):
     url_selector_extract_attempts: Annotated[int, add]
     url_selector_full_page_extracts: Annotated[int, add]
     url_selector_extract_failures: Annotated[int, add]
+    url_selector_decisions: Annotated[list[UrlSelectorDecision], add]
+    query_generator_decisions: Annotated[list[QueryGeneratorDecision], add]
+    evidence_extractor_decisions: Annotated[list[EvidenceExtractorDecision], add]
+    research_agent_steps: Annotated[list[ResearchAgentStep], add]
     search_queries_used: Annotated[list[str], add]
-    excerpt_derivation_checks: Annotated[int, add]
-    evidence_full_snippet_verifications: Annotated[int, add]
     evidence_full_page_extracts: Annotated[int, add]
 
 
-class TestResearchAgentState(AgentState):
-    company: str
-    requirement: str
-    search_documents: Annotated[dict[str, TestSearchDocument], or_]
-    inspected_urls: Annotated[dict[str, bool], or_]
-    verified_evidence: Annotated[list[TestEvidence], add]
-    failed_evidence: Annotated[list[FailedEvidence], add]
-    verifier_judgments: Annotated[list[VerifierJudgment], add]
-    search_queries_used: Annotated[list[str], add]
-    web_search_count: Annotated[int, add]
-
-
-class TestResearchInput(TypedDict):
-    company: str
-    requirement: str
-
-
-class TestResearchOutput(TypedDict):
-    sufficient: bool
-    sufficient_reason: str
-    verified_evidence: list[TestEvidence]
-    failed_evidence: list[FailedEvidence]
-    verifier_judgments: list[VerifierJudgment]
-    search_tool_call_count: int
-    inspect_tool_call_count: int
-    write_evidence_tool_call_count: int
-    think_tool_call_count: int
-
-
-class TestResearchState(TypedDict):
-    company: str
-    requirement: str
-    sufficient: bool | None
-    sufficient_reason: str
-    verified_evidence: Annotated[list[TestEvidence], add]
-    failed_evidence: Annotated[list[FailedEvidence], add]
-    verifier_judgments: Annotated[list[VerifierJudgment], add]
-    search_documents: Annotated[dict[str, TestSearchDocument], or_]
-    search_queries_used: Annotated[list[str], add]
-    search_tool_call_count: int
-    inspect_tool_call_count: int
-    write_evidence_tool_call_count: int
-    think_tool_call_count: int
+class PlannerAgentState(AgentState):
+    research_plan: NotRequired[ResearchPlan]
 
 
 class RfpAgentState(AgentState):
@@ -158,6 +181,8 @@ class FitScoreInput(TypedDict):
     company: str
     requirement: str
     verified_evidence: list[Evidence]
+    verified_claims: NotRequired[list[str]]
+    satisfied: bool
 
 class FitScoreUpdate(TypedDict):
     passed: bool
