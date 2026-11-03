@@ -78,23 +78,6 @@ def _apify_item_to_candidate(item: dict[str, Any]) -> CandidateRecord | None:
     )
 
 
-def _upsert_candidate(record: CandidateRecord) -> None:
-    try:
-        from repositories.postgresProvider import upsert_initial_candidates
-    except Exception as exc:  # pragma: no cover - optional DB
-        logger.warning("Skipping candidate upsert (import failed): %s", exc)
-        return
-    try:
-        upsert_initial_candidates(record)
-    except Exception as exc:  # pragma: no cover - DB may be down
-        logger.warning(
-            "Failed to upsert candidate %s (%s): %s",
-            record.company_name,
-            record.place_id,
-            exc,
-        )
-
-
 def _http_status(exc: BaseException) -> int | None:
     status = getattr(exc, "status_code", None)
     if isinstance(status, int):
@@ -202,7 +185,18 @@ def _run_apify_scrape(
     }
 
     run = client.actor("nwua9Gu5YrADL7ZDj").call(run_input=run_input)
-    dataset = client.dataset(run["defaultDatasetId"])
+    if run is None:
+        raise RuntimeError("Apify actor call returned no run result")
+    # apify-client may return a dict (legacy) or a pydantic Run model.
+    if isinstance(run, dict):
+        dataset_id = run.get("defaultDatasetId") or run.get("default_dataset_id")
+    else:
+        dataset_id = getattr(run, "default_dataset_id", None) or getattr(
+            run, "defaultDatasetId", None
+        )
+    if not dataset_id:
+        raise RuntimeError(f"Apify run missing default dataset id: {run!r}")
+    dataset = client.dataset(dataset_id)
     return list(dataset.iterate_items())
 
 
@@ -212,12 +206,12 @@ def scrape_companies(
     company_type: str,
     number: int,
     persist_json: bool = True,
-    upsert: bool = True,
 ) -> list[dict[str, Any]]:
     """Run Google Maps Apify scrape and return normalized company dicts.
 
     Retries transient failures (5xx, 429, timeouts). Does not retry auth,
-    payment, or other 4xx client errors.
+    payment, or other 4xx client errors. Candidates go to the run Store;
+    no separate initial_candidates table write.
     """
     try:
         import apify_client  # noqa: F401
@@ -282,8 +276,6 @@ def scrape_companies(
         if record is None or record.place_id in seen:
             continue
         seen.add(record.place_id)
-        if upsert:
-            _upsert_candidate(record)
         companies.append(
             {
                 "place_id": record.place_id,

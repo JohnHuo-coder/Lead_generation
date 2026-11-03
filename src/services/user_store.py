@@ -7,7 +7,6 @@ from typing import Any
 from urllib.parse import quote_plus
 
 from dotenv import load_dotenv
-from langgraph.checkpoint.postgres import PostgresSaver
 from langgraph.store.base import BaseStore
 from langgraph.store.postgres import PostgresStore
 from psycopg.rows import dict_row
@@ -17,15 +16,10 @@ load_dotenv()
 
 logger = logging.getLogger(__name__)
 
-# Background orchestrator threads can bind an explicit store; otherwise use
-# the process-wide Postgres singleton.
-_thread_store = threading.local()
-
 USER_PROFILE_KEY = "profile"
 RUN_RECORD_KEY = "record"
 
 _pool: ConnectionPool | None = None
-_checkpointer: PostgresSaver | None = None
 _store: PostgresStore | None = None
 _init_lock = threading.RLock()
 
@@ -33,9 +27,9 @@ _init_lock = threading.RLock()
 def database_uri() -> str:
     """Build a Postgres URI from the same env vars as db.db.
 
-    For Supabase, prefer the session pooler port for LangGraph persistence if
-    the transaction pooler misbehaves with checkpointer statements. sslmode is
-    required. prepare_threshold is disabled on the pool (see _get_pool).
+    For Supabase, prefer the session pooler port for LangGraph Store if the
+    transaction pooler misbehaves. sslmode is required. prepare_threshold is
+    disabled on the pool (see _get_pool).
     """
     host = os.getenv("DB_HOST")
     port = os.getenv("DB_PORT")
@@ -86,21 +80,6 @@ def _get_pool() -> ConnectionPool:
         return _pool
 
 
-def get_planner_checkpointer() -> PostgresSaver:
-    """Lazy Postgres checkpointer singleton (creates LangGraph tables on first use)."""
-    global _checkpointer
-    if _checkpointer is not None:
-        return _checkpointer
-    with _init_lock:
-        if _checkpointer is not None:
-            return _checkpointer
-        saver = PostgresSaver(_get_pool())
-        saver.setup()
-        _checkpointer = saver
-        logger.info("Initialized PostgresSaver for planner checkpoints")
-        return _checkpointer
-
-
 def get_planner_store() -> PostgresStore:
     """Lazy Postgres store singleton (creates store tables on first use)."""
     global _store
@@ -116,30 +95,20 @@ def get_planner_store() -> PostgresStore:
         return _store
 
 
-# Back-compat aliases resolved lazily via module __getattr__.
+# Back-compat alias resolved lazily via module __getattr__.
 def __getattr__(name: str) -> Any:
-    if name == "planner_checkpointer":
-        return get_planner_checkpointer()
     if name == "planner_store":
         return get_planner_store()
     raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
 
 
-def bind_thread_store(store: BaseStore | None) -> None:
-    _thread_store.store = store
-
-
-def clear_thread_store() -> None:
-    if hasattr(_thread_store, "store"):
-        delattr(_thread_store, "store")
-
-
 def current_store(preferred: BaseStore | None = None) -> BaseStore:
-    if preferred is not None:
-        return preferred
-    bound = getattr(_thread_store, "store", None)
-    if bound is not None:
-        return bound
+    """Return the process-wide Postgres store used by planner and orchestrator.
+
+    ``preferred`` (e.g. ``runtime.store``) is ignored on purpose: langgraph-api
+    may inject a different store into ToolRuntime, which previously caused
+    planner writes to miss the Postgres rows that orchestrator reads.
+    """
     return get_planner_store()
 
 

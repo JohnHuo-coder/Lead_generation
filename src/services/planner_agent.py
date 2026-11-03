@@ -1,14 +1,18 @@
 from __future__ import annotations
 
 import logging
+import os
+import re
 import threading
 import uuid
 from datetime import datetime, timezone
+from typing import Any
 
 from langchain.agents import create_agent
 from langchain.messages import ToolMessage
 from langchain.tools import ToolRuntime, tool
 from langgraph.types import Command
+from langgraph_sdk import get_sync_client
 from pydantic import BaseModel, Field
 
 from components.state import PlannerAgentState
@@ -17,10 +21,7 @@ from prompts.planner import PLANNER_SYSTEM_PROMPT
 from prompts.rules import format_skill_catalog, resolve_skill_ids
 from schemas.research_schemas import ResearchPlan
 from services.user_store import (
-    bind_thread_store,
-    clear_thread_store,
     current_store,
-    get_planner_checkpointer,
     get_planner_store,
     get_profile,
     get_run,
@@ -32,6 +33,60 @@ from services.user_store import (
 
 logger = logging.getLogger(__name__)
 
+# Graph name from langgraph.json; override if the deployed assistant id differs.
+ORCHESTRATOR_ASSISTANT_ID = os.getenv("ORCHESTRATOR_ASSISTANT_ID", "orchestrator")
+
+# Plan-lock replies that must not be treated as scrape answers.
+_CONFIRM_ONLY_RE = re.compile(
+    r"^\s*(confirm|confirmed|looks good|lgtm|ok|okay|yes|yep|yeah|sure|"
+    r"go ahead|approved|好的|确认|可以|没问题|行|同意)\s*[.!。！？]?\s*$",
+    re.IGNORECASE,
+)
+
+
+def _langgraph_api_client():
+    """Client for the LangGraph API (local `langgraph dev` or cloud deploy)."""
+    url = os.getenv("LANGGRAPH_API_URL") or os.getenv(
+        "LANGGRAPH_DEPLOYMENT_URL", "http://127.0.0.1:2024"
+    )
+    api_key = os.getenv("LANGGRAPH_API_KEY") or os.getenv("LANGSMITH_API_KEY")
+    return get_sync_client(url=url, api_key=api_key)
+
+
+def _message_role(msg: Any) -> str:
+    if isinstance(msg, dict):
+        return str(msg.get("type") or msg.get("role") or "").lower()
+    return str(getattr(msg, "type", None) or getattr(msg, "role", "") or "").lower()
+
+
+def _message_text(msg: Any) -> str:
+    content = msg.get("content") if isinstance(msg, dict) else getattr(msg, "content", "")
+    if isinstance(content, list):
+        parts: list[str] = []
+        for block in content:
+            if isinstance(block, str):
+                parts.append(block)
+            elif isinstance(block, dict):
+                parts.append(str(block.get("text") or block.get("content") or ""))
+            else:
+                parts.append(str(getattr(block, "text", "") or ""))
+        return "\n".join(parts)
+    return str(content or "")
+
+
+def _last_human_text(messages: Any) -> str:
+    for msg in reversed(messages or []):
+        if _message_role(msg) in {"human", "user"}:
+            return _message_text(msg).strip()
+    return ""
+
+
+def _user_stated_scrape_number(text: str, number: int) -> bool:
+    """True only when the latest user message explicitly includes this count."""
+    if not text or _CONFIRM_ONLY_RE.match(text):
+        return False
+    return bool(re.search(rf"(?<!\d){int(number)}(?!\d)", text))
+
 
 class ScrapeTarget(BaseModel):
     location: str = Field(description="City or area to search, e.g. Bangkok Sukhumvit.")
@@ -41,7 +96,10 @@ class ScrapeTarget(BaseModel):
     number: int = Field(
         ge=1,
         le=100,
-        description="How many places to scrape (1-100).",
+        description=(
+            "How many places to scrape (1-100). Must be a number the user "
+            "explicitly stated in their latest message — never invent or default."
+        ),
     )
 
 
@@ -55,7 +113,8 @@ def submit_research_plan(
     Call only after you have shown every requirement's description,
     positive_when, negative_when, does_not_count, and skills, and the
     user has explicitly confirmed. Do not call this to draft or to ask
-    questions.
+    questions. Do not call set_scrape_target in the same turn — wait for
+    the user's next message with location, company type, and number.
     """
     if not plan.requirements:
         return Command(
@@ -81,7 +140,7 @@ def submit_research_plan(
     )
 
     user_id = get_user_id(runtime.config)
-    store = current_store(runtime.store)
+    store = current_store()
     put_profile(
         store,
         user_id,
@@ -98,9 +157,11 @@ def submit_research_plan(
             "messages": [
                 ToolMessage(
                     content=(
-                        "Research plan locked and saved. Next ask for scrape "
-                        "location, company type, and how many places to collect, "
-                        "then call set_scrape_target."
+                        "Research plan locked and saved. Do NOT call "
+                        "set_scrape_target yet. Reply to the user asking for "
+                        "scrape location, company type, and an explicit number "
+                        "of places (1-100). Call set_scrape_target only after "
+                        "their next message states all three — never invent them."
                     ),
                     tool_call_id=runtime.tool_call_id,
                 )
@@ -116,11 +177,13 @@ def set_scrape_target(
 ) -> Command:
     """Save Google Maps scrape parameters after the research plan is locked.
 
-    Call only when research_plan is already locked and the user has provided
-    location, company type, and number.
+    Call only after the user has stated location, company type, and number in
+    a message after plan confirmation. Never invent or default the number.
+    Do not call this in the same turn as submit_research_plan when the user
+    only said confirm.
     """
     user_id = get_user_id(runtime.config)
-    store = current_store(runtime.store)
+    store = current_store()
     profile = get_profile(store, user_id)
     if not profile.get("research_plan") and not runtime.state.get("research_plan"):
         return Command(
@@ -130,6 +193,25 @@ def set_scrape_target(
                         content=(
                             "Rejected: lock a research plan with "
                             "submit_research_plan first."
+                        ),
+                        tool_call_id=runtime.tool_call_id,
+                    )
+                ],
+            }
+        )
+
+    last_human = _last_human_text(runtime.state.get("messages"))
+    if not _user_stated_scrape_number(last_human, target.number):
+        return Command(
+            update={
+                "messages": [
+                    ToolMessage(
+                        content=(
+                            "Rejected: the user's latest message does not "
+                            f"explicitly state number={target.number}. Ask for "
+                            "location, company type, and how many places "
+                            "(1-100) as a digit, then call again only after "
+                            "they answer. Do not invent scrape parameters."
                         ),
                         tool_call_id=runtime.tool_call_id,
                     )
@@ -157,38 +239,72 @@ def set_scrape_target(
     )
 
 
-def _launch_orchestrator(*, user_id: str, run_id: str, store) -> None:
-    def _run() -> None:
-        bind_thread_store(store)
-        try:
-            from graphs.orchestrator_graph import orchestrator_graph
+def _launch_orchestrator(*, user_id: str, run_id: str, store) -> dict[str, Any]:
+    """Enqueue orchestrator as a LangGraph Platform background run.
 
-            orchestrator_graph.invoke(
-                {"user_id": user_id, "run_id": run_id},
-                config={
-                    "configurable": {
-                        "user_id": user_id,
-                        "run_id": run_id,
-                    }
-                },
-            )
-        except Exception as exc:
-            logger.exception("Orchestrator run %s failed", run_id)
-            update_run_status(
-                store,
-                run_id,
-                "error",
-                error=f"{type(exc).__name__}: {exc}",
-            )
-        finally:
-            clear_thread_store()
+    Returns platform thread/run ids. On API failure, marks the research run
+    as error and re-raises.
+    """
+    client = _langgraph_api_client()
+    try:
+        thread = client.threads.create(
+            metadata={
+                "user_id": user_id,
+                "research_run_id": run_id,
+                "graph": ORCHESTRATOR_ASSISTANT_ID,
+            },
+        )
+        thread_id = thread["thread_id"]
+        run = client.runs.create(
+            thread_id,
+            ORCHESTRATOR_ASSISTANT_ID,
+            input={"user_id": user_id, "run_id": run_id},
+            config={
+                "configurable": {
+                    "user_id": user_id,
+                    "run_id": run_id,
+                }
+            },
+            metadata={
+                "user_id": user_id,
+                "research_run_id": run_id,
+            },
+        )
+    except Exception as exc:
+        logger.exception(
+            "Failed to enqueue orchestrator run %s via LangGraph API", run_id
+        )
+        update_run_status(
+            store,
+            run_id,
+            "error",
+            error=(
+                "Failed to start orchestrator via LangGraph API: "
+                f"{type(exc).__name__}: {exc}"
+            ),
+        )
+        raise
 
-    thread = threading.Thread(
-        target=_run,
-        name=f"orchestrator-{run_id}",
-        daemon=True,
+    platform_run_id = run.get("run_id")
+    put_run(
+        store,
+        run_id,
+        {
+            "lg_thread_id": thread_id,
+            "lg_run_id": platform_run_id,
+            "lg_assistant_id": ORCHESTRATOR_ASSISTANT_ID,
+        },
     )
-    thread.start()
+    logger.info(
+        "Enqueued orchestrator research_run_id=%s lg_thread_id=%s lg_run_id=%s",
+        run_id,
+        thread_id,
+        platform_run_id,
+    )
+    return {
+        "lg_thread_id": thread_id,
+        "lg_run_id": platform_run_id,
+    }
 
 
 @tool
@@ -197,11 +313,12 @@ def start_research_run(
 ) -> Command:
     """Start the background scrape + research batch for the locked plan.
 
-    Requires a locked research_plan and scrape_target. Returns immediately;
+    Requires a locked research_plan and scrape_target. Enqueues the
+    orchestrator graph via the LangGraph API and returns immediately;
     the user can keep chatting. Use get_research_status to check progress.
     """
     user_id = get_user_id(runtime.config)
-    store = current_store(runtime.store)
+    store = current_store()
     profile = get_profile(store, user_id)
 
     plan = profile.get("research_plan")
@@ -252,7 +369,7 @@ def start_research_run(
             "user_id": user_id,
             "status": "queued",
             "created_at": now,
-            "research_plan": plan,
+            "research_plan": plan, # store plan and target inside run store as well in case the user change it during the run, act as a reference
             "scrape_target": scrape_target,
             "companies": [],
             "pair_results": [],
@@ -261,14 +378,35 @@ def start_research_run(
         },
     )
     put_profile(store, user_id, {"active_run_id": run_id})
-    _launch_orchestrator(user_id=user_id, run_id=run_id, store=store)
+
+    try:
+        platform = _launch_orchestrator(
+            user_id=user_id, run_id=run_id, store=store
+        )
+    except Exception as exc:
+        return Command(
+            update={
+                "messages": [
+                    ToolMessage(
+                        content=(
+                            f"Failed to enqueue research run {run_id} on the "
+                            f"LangGraph API: {type(exc).__name__}: {exc}. "
+                            "Ensure langgraph dev / deployment is up and "
+                            "LANGGRAPH_API_URL points at it."
+                        ),
+                        tool_call_id=runtime.tool_call_id,
+                    )
+                ],
+            }
+        )
 
     return Command(
         update={
             "messages": [
                 ToolMessage(
                     content=(
-                        f"Research run started in the background (run_id={run_id}). "
+                        f"Research run queued (run_id={run_id}, "
+                        f"lg_run_id={platform.get('lg_run_id')}). "
                         "You can keep chatting. Call get_research_status for progress."
                     ),
                     tool_call_id=runtime.tool_call_id,
@@ -284,7 +422,7 @@ def get_research_status(
 ) -> Command:
     """Return status of the user's active (or latest) research run."""
     user_id = get_user_id(runtime.config)
-    store = current_store(runtime.store)
+    store = current_store()
     profile = get_profile(store, user_id)
     run_id = profile.get("active_run_id")
     if not run_id:
@@ -317,6 +455,10 @@ def get_research_status(
         f"run_id: {run_id}",
         f"status: {status}",
     ]
+    if run.get("lg_run_id"):
+        lines.append(f"lg_run_id: {run.get('lg_run_id')}")
+    if run.get("lg_thread_id"):
+        lines.append(f"lg_thread_id: {run.get('lg_thread_id')}")
     if run.get("company_count") is not None:
         lines.append(f"companies_scraped: {run.get('company_count')}")
     if run.get("pair_total") is not None:
@@ -370,7 +512,6 @@ def _build_planner_graph():
         system_prompt=PLANNER_SYSTEM_PROMPT.format(
             skill_catalog=format_skill_catalog(),
         ),
-        checkpointer=get_planner_checkpointer(),
         store=get_planner_store(),
     )
 
@@ -388,13 +529,12 @@ def get_planner_agent():
     return _planner_graph
 
 
-# langgraph.json loads this symbol; defer DB connect until first use via proxy.
-class _PlannerGraphProxy:
-    def __getattr__(self, name: str):
-        return getattr(get_planner_agent(), name)
+def planner_graph():
+    """LangGraph graph factory (langgraph.json: planner).
 
-    def __call__(self, *args, **kwargs):
-        return get_planner_agent()(*args, **kwargs)
+    Lazy-builds the agent so import does not require a live DB until first use.
+    Must be a zero-arg (or ServerRuntime/RunnableConfig) factory — a callable
+    proxy object is rejected by langgraph-api.
+    """
+    return get_planner_agent()
 
-
-planner_graph = _PlannerGraphProxy()

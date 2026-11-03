@@ -65,6 +65,14 @@ From the project root, with `PYTHONPATH=src` (or an editable install):
 langgraph dev
 ```
 
+Optional env for the planner → orchestrator handoff (defaults work with local `langgraph dev`):
+
+- `LANGGRAPH_API_URL` — API base URL (default `http://127.0.0.1:2024`)
+- `LANGGRAPH_API_KEY` or `LANGSMITH_API_KEY` — required for cloud deploys
+- `ORCHESTRATOR_ASSISTANT_ID` — graph/assistant name (default `orchestrator`)
+
+`start_research_run` enqueues the **orchestrator** graph via `langgraph_sdk` `runs.create` (platform-managed background run), not a local thread.
+
 Chat with the **planner** graph to confirm a plan and scrape target, then start a research run. Poll status via the planner’s status tool; inspect detailed rows in `research_run_results`.
 
 ## Flow (high level)
@@ -72,8 +80,9 @@ Chat with the **planner** graph to confirm a plan and scrape target, then start 
 ```text
 User ↔ planner_graph
          │  submit plan / scrape target / start_research_run
+         │  runs.create → LangGraph API
          ▼
-   orchestrator_graph
+   orchestrator_graph (background run)
          │  Apify scrape → companies
          │  research_subgraph.batch(company × requirement)
          ▼

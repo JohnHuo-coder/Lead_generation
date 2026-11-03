@@ -21,7 +21,6 @@ def get_companies_info(data):
         company_type=company_type,
         number=int(target_number),
         persist_json=True,
-        upsert=True,
     )
 
 
