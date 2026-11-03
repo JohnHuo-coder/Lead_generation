@@ -227,77 +227,6 @@ wheels = [
 ]
 
 [[package]]
-name = "b2b-prospect-discover"
-version = "0.1.0"
-source = { editable = "." }
-dependencies = [
-    { name = "apify-client" },
-    { name = "ipykernel" },
-    { name = "ipywidgets" },
-    { name = "jupyterlab" },
-    { name = "langchain" },
-    { name = "langchain-anthropic" },
-    { name = "langchain-community" },
-    { name = "langchain-core" },
-    { name = "langchain-google-genai" },
-    { name = "langchain-google-vertexai" },
-    { name = "langchain-mcp-adapters" },
-    { name = "langchain-model-profiles" },
-    { name = "langchain-openai" },
-    { name = "langchain-tavily" },
-    { name = "langchain-text-splitters" },
-    { name = "langgraph" },
-    { name = "langgraph-api" },
-    { name = "langgraph-checkpoint-postgres" },
-    { name = "langgraph-cli" },
-    { name = "langgraph-sdk" },
-    { name = "langsmith" },
-    { name = "mcp" },
-    { name = "mcp-server-time" },
-    { name = "psycopg", extra = ["binary", "pool"] },
-    { name = "pypdf" },
-    { name = "python-dotenv" },
-    { name = "scipy" },
-    { name = "sounddevice" },
-    { name = "tavily" },
-    { name = "tavily-python" },
-]
-
-[package.metadata]
-requires-dist = [
-    { name = "apify-client", specifier = ">=1.0.0" },
-    { name = "ipykernel", specifier = ">=7.1.0" },
-    { name = "ipywidgets", specifier = ">=8.1.8" },
-    { name = "jupyterlab", specifier = ">=4.5.9" },
-    { name = "langchain", specifier = ">=1.3.10" },
-    { name = "langchain-anthropic", specifier = ">=1.4.6" },
-    { name = "langchain-community", specifier = ">=0.4.1" },
-    { name = "langchain-core", specifier = ">=1.3.3" },
-    { name = "langchain-google-genai", specifier = ">=3.1.0" },
-    { name = "langchain-google-vertexai", specifier = ">=3.0.3" },
-    { name = "langchain-mcp-adapters", specifier = ">=0.1.13" },
-    { name = "langchain-model-profiles", specifier = ">=0.0.4" },
-    { name = "langchain-openai", specifier = ">=1.1.14" },
-    { name = "langchain-tavily", specifier = ">=0.2.13" },
-    { name = "langchain-text-splitters", specifier = ">=1.1.2" },
-    { name = "langgraph", specifier = ">=1.0.3" },
-    { name = "langgraph-api", specifier = ">=0.5.37" },
-    { name = "langgraph-checkpoint-postgres", specifier = ">=2.0.0" },
-    { name = "langgraph-cli", specifier = ">=0.4.9" },
-    { name = "langgraph-sdk", specifier = ">=0.4.0" },
-    { name = "langsmith", specifier = ">=0.8.18" },
-    { name = "mcp", specifier = ">=1.21.1,<2" },
-    { name = "mcp-server-time", specifier = "<=2026.7.10" },
-    { name = "psycopg", extras = ["binary", "pool"], specifier = ">=3.2.0" },
-    { name = "pypdf", specifier = ">=6.13.3" },
-    { name = "python-dotenv", specifier = ">=1.2.0" },
-    { name = "scipy", specifier = ">=1.16.3" },
-    { name = "sounddevice", specifier = ">=0.5.3" },
-    { name = "tavily", specifier = ">=1.1.0" },
-    { name = "tavily-python", specifier = ">=0.7.13" },
-]
-
-[[package]]
 name = "babel"
 version = "2.18.0"
 source = { registry = "https://pypi.org/simple" }
@@ -1094,6 +1023,77 @@ source = { registry = "https://pypi.org/simple" }
 sdist = { url = "https://files.pythonhosted.org/packages/01/ee/02a2c011bdab74c6fb3c75474d40b3052059d95df7e73351460c8588d963/h11-0.16.0.tar.gz", hash = "sha256:4e35b956cf45792e4caa5885e69fba00bdbc6ffafbfa020300e549b208ee5ff1", size = 101250, upload-time = "2025-04-24T03:35:25.427Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/04/4b/29cac41a4d98d144bf5f6d33995617b185d14b22401f75ca86f384e87ff1/h11-0.16.0-py3-none-any.whl", hash = "sha256:63cf8bbe7522de3bf65932fda1d9c2772064ffb3dae62d55932da54b31cb6c86", size = 37515, upload-time = "2025-04-24T03:35:24.344Z" },
+]
+
+[[package]]
+name = "hotel-research-agent"
+version = "0.1.0"
+source = { editable = "." }
+dependencies = [
+    { name = "apify-client" },
+    { name = "ipykernel" },
+    { name = "ipywidgets" },
+    { name = "jupyterlab" },
+    { name = "langchain" },
+    { name = "langchain-anthropic" },
+    { name = "langchain-community" },
+    { name = "langchain-core" },
+    { name = "langchain-google-genai" },
+    { name = "langchain-google-vertexai" },
+    { name = "langchain-mcp-adapters" },
+    { name = "langchain-model-profiles" },
+    { name = "langchain-openai" },
+    { name = "langchain-tavily" },
+    { name = "langchain-text-splitters" },
+    { name = "langgraph" },
+    { name = "langgraph-api" },
+    { name = "langgraph-checkpoint-postgres" },
+    { name = "langgraph-cli" },
+    { name = "langgraph-sdk" },
+    { name = "langsmith" },
+    { name = "mcp" },
+    { name = "mcp-server-time" },
+    { name = "psycopg", extra = ["binary", "pool"] },
+    { name = "pypdf" },
+    { name = "python-dotenv" },
+    { name = "scipy" },
+    { name = "sounddevice" },
+    { name = "tavily" },
+    { name = "tavily-python" },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "apify-client", specifier = ">=1.0.0" },
+    { name = "ipykernel", specifier = ">=7.1.0" },
+    { name = "ipywidgets", specifier = ">=8.1.8" },
+    { name = "jupyterlab", specifier = ">=4.5.9" },
+    { name = "langchain", specifier = ">=1.3.10" },
+    { name = "langchain-anthropic", specifier = ">=1.4.6" },
+    { name = "langchain-community", specifier = ">=0.4.1" },
+    { name = "langchain-core", specifier = ">=1.3.3" },
+    { name = "langchain-google-genai", specifier = ">=3.1.0" },
+    { name = "langchain-google-vertexai", specifier = ">=3.0.3" },
+    { name = "langchain-mcp-adapters", specifier = ">=0.1.13" },
+    { name = "langchain-model-profiles", specifier = ">=0.0.4" },
+    { name = "langchain-openai", specifier = ">=1.1.14" },
+    { name = "langchain-tavily", specifier = ">=0.2.13" },
+    { name = "langchain-text-splitters", specifier = ">=1.1.2" },
+    { name = "langgraph", specifier = ">=1.0.3" },
+    { name = "langgraph-api", specifier = ">=0.5.37" },
+    { name = "langgraph-checkpoint-postgres", specifier = ">=2.0.0" },
+    { name = "langgraph-cli", specifier = ">=0.4.9" },
+    { name = "langgraph-sdk", specifier = ">=0.4.0" },
+    { name = "langsmith", specifier = ">=0.8.18" },
+    { name = "mcp", specifier = ">=1.21.1,<2" },
+    { name = "mcp-server-time", specifier = "<=2026.7.10" },
+    { name = "psycopg", extras = ["binary", "pool"], specifier = ">=3.2.0" },
+    { name = "pypdf", specifier = ">=6.13.3" },
+    { name = "python-dotenv", specifier = ">=1.2.0" },
+    { name = "scipy", specifier = ">=1.16.3" },
+    { name = "sounddevice", specifier = ">=0.5.3" },
+    { name = "tavily", specifier = ">=1.1.0" },
+    { name = "tavily-python", specifier = ">=0.7.13" },
 ]
 
 [[package]]
