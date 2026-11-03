@@ -81,7 +81,13 @@ def _get_pool() -> ConnectionPool:
 
 
 def get_planner_store() -> PostgresStore:
-    """Lazy Postgres store singleton (creates store tables on first use)."""
+    """Local PostgresStore fallback for scripts/notebooks outside Agent Server.
+
+    Prefer ``current_store(runtime.store)`` / ``langgraph.config.get_store()``
+    under ``langgraph dev`` / ``up`` / deploy so planner and orchestrator share
+    the platform store. Final research rows still go to the app DB via
+    ``research_results_repository``.
+    """
     global _store
     if _store is not None:
         return _store
@@ -91,7 +97,7 @@ def get_planner_store() -> PostgresStore:
         store = PostgresStore(_get_pool())
         store.setup()
         _store = store
-        logger.info("Initialized PostgresStore for planner/orchestrator state")
+        logger.info("Initialized local PostgresStore fallback")
         return _store
 
 
@@ -103,12 +109,21 @@ def __getattr__(name: str) -> Any:
 
 
 def current_store(preferred: BaseStore | None = None) -> BaseStore:
-    """Return the process-wide Postgres store used by planner and orchestrator.
+    """Resolve the LangGraph Store for plan/run metadata.
 
-    ``preferred`` (e.g. ``runtime.store``) is ignored on purpose: langgraph-api
-    may inject a different store into ToolRuntime, which previously caused
-    planner writes to miss the Postgres rows that orchestrator reads.
+    Order: explicit ``preferred`` (e.g. ``runtime.store``) → platform
+    ``get_store()`` when inside a graph run → local PostgresStore fallback.
     """
+    if preferred is not None:
+        return preferred
+    try:
+        from langgraph.config import get_store
+
+        store = get_store()
+        if store is not None:
+            return store
+    except Exception:
+        logger.debug("Platform store unavailable; using local PostgresStore", exc_info=True)
     return get_planner_store()
 
 
@@ -137,6 +152,15 @@ def get_profile(store: BaseStore | None, user_id: str) -> dict[str, Any]:
     return dict(item.value)
 
 
+async def aget_profile(store: BaseStore | None, user_id: str) -> dict[str, Any]:
+    if store is None:
+        return {}
+    item = await store.aget(user_namespace(user_id), USER_PROFILE_KEY)
+    if item is None or not isinstance(item.value, dict):
+        return {}
+    return dict(item.value)
+
+
 def put_profile(store: BaseStore | None, user_id: str, profile: dict[str, Any]) -> None:
     if store is None:
         return
@@ -145,10 +169,29 @@ def put_profile(store: BaseStore | None, user_id: str, profile: dict[str, Any]) 
     store.put(user_namespace(user_id), USER_PROFILE_KEY, current)
 
 
+async def aput_profile(
+    store: BaseStore | None, user_id: str, profile: dict[str, Any]
+) -> None:
+    if store is None:
+        return
+    current = await aget_profile(store, user_id)
+    current.update(profile)
+    await store.aput(user_namespace(user_id), USER_PROFILE_KEY, current)
+
+
 def get_run(store: BaseStore | None, run_id: str) -> dict[str, Any]:
     if store is None:
         return {}
     item = store.get(run_namespace(run_id), RUN_RECORD_KEY)
+    if item is None or not isinstance(item.value, dict):
+        return {}
+    return dict(item.value)
+
+
+async def aget_run(store: BaseStore | None, run_id: str) -> dict[str, Any]:
+    if store is None:
+        return {}
+    item = await store.aget(run_namespace(run_id), RUN_RECORD_KEY)
     if item is None or not isinstance(item.value, dict):
         return {}
     return dict(item.value)
@@ -162,6 +205,16 @@ def put_run(store: BaseStore | None, run_id: str, record: dict[str, Any]) -> Non
     store.put(run_namespace(run_id), RUN_RECORD_KEY, current)
 
 
+async def aput_run(
+    store: BaseStore | None, run_id: str, record: dict[str, Any]
+) -> None:
+    if store is None:
+        return
+    current = await aget_run(store, run_id)
+    current.update(record)
+    await store.aput(run_namespace(run_id), RUN_RECORD_KEY, current)
+
+
 def update_run_status(
     store: BaseStore | None,
     run_id: str,
@@ -170,3 +223,13 @@ def update_run_status(
 ) -> None:
     payload = {"status": status, **extra}
     put_run(store, run_id, payload)
+
+
+async def aupdate_run_status(
+    store: BaseStore | None,
+    run_id: str,
+    status: str,
+    **extra: Any,
+) -> None:
+    payload = {"status": status, **extra}
+    await aput_run(store, run_id, payload)

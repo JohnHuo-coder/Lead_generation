@@ -1,13 +1,12 @@
 from __future__ import annotations
 
-import asyncio
 import logging
 import os
 import re
 import threading
 import uuid
 from datetime import datetime, timezone
-from typing import Any, Coroutine, TypeVar
+from typing import Any
 
 from langchain.agents import create_agent
 from langchain.messages import ToolMessage
@@ -22,14 +21,15 @@ from prompts.planner import PLANNER_SYSTEM_PROMPT
 from prompts.rules import format_skill_catalog, resolve_skill_ids
 from schemas.research_schemas import ResearchPlan
 from services.user_store import (
+    aget_profile,
+    aget_run,
+    aput_profile,
+    aput_run,
+    aupdate_run_status,
     current_store,
-    get_planner_store,
     get_profile,
-    get_run,
     get_user_id,
     put_profile,
-    put_run,
-    update_run_status,
 )
 
 logger = logging.getLogger(__name__)
@@ -40,12 +40,9 @@ ORCHESTRATOR_ASSISTANT_ID = os.getenv("ORCHESTRATOR_ASSISTANT_ID", "orchestrator
 # Plan-lock replies that must not be treated as scrape answers.
 _CONFIRM_ONLY_RE = re.compile(
     r"^\s*(confirm|confirmed|looks good|lgtm|ok|okay|yes|yep|yeah|sure|"
-    r"go ahead|approved|好的|确认|可以|没问题|行|同意)\s*[.!。！？]?\s*$",
+    r"go ahead|approved)\s*[.!]?\s*$",
     re.IGNORECASE,
 )
-
-
-_T = TypeVar("_T")
 
 
 def _langgraph_api_url() -> str | None:
@@ -61,30 +58,6 @@ def _langgraph_api_url() -> str | None:
         or os.getenv("LANGGRAPH_DEPLOYMENT_URL")
         or None
     )
-
-
-def _run_coro(coro: Coroutine[Any, Any, _T]) -> _T:
-    """Run an async coroutine from sync tool code (often in a worker thread)."""
-    try:
-        asyncio.get_running_loop()
-    except RuntimeError:
-        return asyncio.run(coro)
-    # Already inside a loop: run in a fresh thread with its own loop.
-    result: dict[str, Any] = {}
-    error: dict[str, BaseException] = {}
-
-    def _target() -> None:
-        try:
-            result["value"] = asyncio.run(coro)
-        except BaseException as exc:  # noqa: BLE001 — re-raise after join
-            error["exc"] = exc
-
-    thread = threading.Thread(target=_target, name="langgraph-sdk-coro")
-    thread.start()
-    thread.join()
-    if "exc" in error:
-        raise error["exc"]
-    return result["value"]
 
 
 def _message_role(msg: Any) -> str:
@@ -174,7 +147,7 @@ def submit_research_plan(
     )
 
     user_id = get_user_id(runtime.config)
-    store = current_store()
+    store = current_store(runtime.store)
     put_profile(
         store,
         user_id,
@@ -217,7 +190,7 @@ def set_scrape_target(
     only said confirm.
     """
     user_id = get_user_id(runtime.config)
-    store = current_store()
+    store = current_store(runtime.store)
     profile = get_profile(store, user_id)
     if not profile.get("research_plan") and not runtime.state.get("research_plan"):
         return Command(
@@ -305,22 +278,22 @@ async def _enqueue_orchestrator_run(*, user_id: str, run_id: str) -> dict[str, A
     }
 
 
-def _launch_orchestrator(*, user_id: str, run_id: str, store) -> dict[str, Any]:
+async def _launch_orchestrator(
+    *, user_id: str, run_id: str, store
+) -> dict[str, Any]:
     """Enqueue orchestrator as a LangGraph Platform background run.
 
-    Uses the async SDK with ``url=None`` (in-process) unless a remote URL is
-    set. Returns platform thread/run ids. On API failure, marks the research
-    run as error and re-raises.
+    Uses ``get_client(url=None)`` (in-process) unless a remote URL is set.
+    Returns platform thread/run ids. On API failure, marks the research run
+    as error and re-raises.
     """
     try:
-        platform = _run_coro(
-            _enqueue_orchestrator_run(user_id=user_id, run_id=run_id)
-        )
+        platform = await _enqueue_orchestrator_run(user_id=user_id, run_id=run_id)
     except Exception as exc:
         logger.exception(
             "Failed to enqueue orchestrator run %s via LangGraph API", run_id
         )
-        update_run_status(
+        await aupdate_run_status(
             store,
             run_id,
             "error",
@@ -331,7 +304,7 @@ def _launch_orchestrator(*, user_id: str, run_id: str, store) -> dict[str, Any]:
         )
         raise
 
-    put_run(
+    await aput_run(
         store,
         run_id,
         {
@@ -350,7 +323,7 @@ def _launch_orchestrator(*, user_id: str, run_id: str, store) -> dict[str, Any]:
 
 
 @tool
-def start_research_run(
+async def start_research_run(
     runtime: ToolRuntime[None, PlannerAgentState],
 ) -> Command:
     """Start the background scrape + research batch for the locked plan.
@@ -360,8 +333,8 @@ def start_research_run(
     the user can keep chatting. Use get_research_status to check progress.
     """
     user_id = get_user_id(runtime.config)
-    store = current_store()
-    profile = get_profile(store, user_id)
+    store = current_store(runtime.store)
+    profile = await aget_profile(store, user_id)
 
     plan = profile.get("research_plan")
     if not plan and runtime.state.get("research_plan") is not None:
@@ -403,7 +376,7 @@ def start_research_run(
 
     run_id = str(uuid.uuid4())
     now = datetime.now(timezone.utc).isoformat()
-    put_run(
+    await aput_run(
         store,
         run_id,
         {
@@ -411,7 +384,8 @@ def start_research_run(
             "user_id": user_id,
             "status": "queued",
             "created_at": now,
-            "research_plan": plan, # store plan and target inside run store as well in case the user change it during the run, act as a reference
+            # Snapshot plan/target on the run in case the profile changes later.
+            "research_plan": plan,
             "scrape_target": scrape_target,
             "companies": [],
             "pair_results": [],
@@ -419,10 +393,10 @@ def start_research_run(
             "error": "",
         },
     )
-    put_profile(store, user_id, {"active_run_id": run_id})
+    await aput_profile(store, user_id, {"active_run_id": run_id})
 
     try:
-        platform = _launch_orchestrator(
+        platform = await _launch_orchestrator(
             user_id=user_id, run_id=run_id, store=store
         )
     except Exception as exc:
@@ -460,13 +434,13 @@ def start_research_run(
 
 
 @tool
-def get_research_status(
+async def get_research_status(
     runtime: ToolRuntime[None, PlannerAgentState],
 ) -> Command:
     """Return status of the user's active (or latest) research run."""
     user_id = get_user_id(runtime.config)
-    store = current_store()
-    profile = get_profile(store, user_id)
+    store = current_store(runtime.store)
+    profile = await aget_profile(store, user_id)
     run_id = profile.get("active_run_id")
     if not run_id:
         return Command(
@@ -480,7 +454,7 @@ def get_research_status(
             }
         )
 
-    run = get_run(store, run_id)
+    run = await aget_run(store, run_id)
     if not run:
         return Command(
             update={
@@ -555,7 +529,6 @@ def _build_planner_graph():
         system_prompt=PLANNER_SYSTEM_PROMPT.format(
             skill_catalog=format_skill_catalog(),
         ),
-        store=get_planner_store(),
     )
 
 

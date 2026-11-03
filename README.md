@@ -76,6 +76,8 @@ Optional env for the planner → orchestrator handoff:
 
 `start_research_run` enqueues the **orchestrator** graph via `runs.create` (platform background run).
 
+Plan / scrape / run **status** use the Agent Server Store (`runtime.store` / `get_store()`). Detailed pair rows go to your app DB table `research_run_results`.
+
 Chat with the **planner** graph to confirm a plan and scrape target, then start a research run. Poll status via the planner’s status tool; inspect detailed rows in `research_run_results`.
 
 ## Flow (high level)
@@ -83,13 +85,13 @@ Chat with the **planner** graph to confirm a plan and scrape target, then start 
 ```text
 User ↔ planner_graph
          │  submit plan / scrape target / start_research_run
-         │  runs.create → LangGraph API
+         │  runs.create (in-process) → orchestrator
          ▼
    orchestrator_graph (background run)
          │  Apify scrape → companies
          │  research_subgraph.batch(company × requirement)
          ▼
-   research_run_results  +  Store run summary (counts only)
+   platform Store (run summary)  +  research_run_results (pair rows)
 ```
 
 ## Notes
