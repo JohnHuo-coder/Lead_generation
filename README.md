@@ -1,6 +1,8 @@
-# B2B Lead Gen
+# hotel-research-agent
 
-LangGraph-based B2B prospect discovery: chat to define research criteria, scrape Google Maps candidates, then research each company against each requirement with web evidence.
+LangGraph agent for hotel / venue research: chat to define criteria, scrape Google Maps candidates, then research each property against each requirement with web evidence.
+
+Repo: [github.com/JohnHuo-coder/hotel-research-agent](https://github.com/JohnHuo-coder/hotel-research-agent)
 
 ## What it does
 
@@ -8,7 +10,7 @@ LangGraph-based B2B prospect discovery: chat to define research criteria, scrape
 2. **Orchestrator** — loads that run context, scrapes places via Apify Google Maps, fans out **company × requirement** research jobs, aggregates pass/fail stats, and persists pair-level results.
 3. **Research subgraph** — tool-using agent that searches the web, selects URLs, extracts evidence, and verifies claims until it can decide whether the requirement is satisfied.
 
-User-facing run status stays as a slim summary in LangGraph Store. Full per-pair outcomes (claims, sufficient/satisfied, errors) go to a Postgres table `research_run_results`.
+Plan / scrape / run **status** live in the Agent Server Store (`runtime.store` / `get_store()`). Full per-pair outcomes (claims, sufficient/satisfied, errors) go to the app Postgres table `research_run_results`.
 
 ## Repo layout
 
@@ -19,14 +21,14 @@ User-facing run status stays as a slim summary in LangGraph Store. Full per-pair
 | `src/graphs/main_graph.py` | `research_subgraph` (one company × one requirement) |
 | `src/components/tools.py` | Research tools (search, extract, verify) |
 | `src/services/gmap_scrape.py` | Apify Google Maps scrape (+ retries) |
-| `src/services/user_store.py` | Postgres checkpointer + Store for planner/runs |
-| `src/repositories/research_results_repository.py` | Upsert pair results |
+| `src/services/user_store.py` | Profile/run helpers; prefers platform Store |
+| `src/repositories/research_results_repository.py` | Upsert pair results into app DB |
 | `src/prompts/` | Planner, research, and domain skill rules |
-| `langgraph.json` | Local LangGraph graph entrypoints (see below) |
+| `langgraph.json` | Graph entrypoints for `langgraph dev` / deploy |
 
 ## Setup
 
-Requires Python 3.12–3.13 and a Postgres database (e.g. Supabase).
+Requires Python 3.12–3.13 and a Postgres database for app tables (e.g. Supabase). Under `langgraph up` / LangSmith deploy, conversation checkpoints and the Agent Server Store use the platform Postgres.
 
 ```bash
 python -m venv .venv
@@ -39,23 +41,11 @@ Copy `.env` with at least:
 - `OPENAI_API_KEY` (or whatever your research LLM uses)
 - `TAVILY_API_KEY`
 - `APIFY_API_KEY` or `APIFY_TOKEN`
-- `DB_HOST`, `DB_PORT`, `DB_NAME`, `DB_USER`, `DB_PASSWORD` (same DB for app tables + LangGraph persistence)
+- `DB_HOST`, `DB_PORT`, `DB_NAME`, `DB_USER`, `DB_PASSWORD` (app table `research_run_results`)
 
 Create the results table in Postgres (columns must match `research_results_repository` upsert / unique on `(run_id, company_name, requirement_id)`).
 
-If `langgraph.json` is missing locally (this repo gitignores `*.json`), create one:
-
-```json
-{
-  "dependencies": ["."],
-  "graphs": {
-    "planner": "./src/services/planner_agent.py:planner_graph",
-    "orchestrator": "./src/graphs/orchestrator_graph.py:orchestrator_graph",
-    "research": "./src/graphs/main_graph.py:research_subgraph"
-  },
-  "env": ".env"
-}
-```
+`langgraph.json` is tracked in this repo (required for LangSmith / `langgraph deploy`).
 
 ## Run
 
@@ -65,8 +55,6 @@ From the project root, with `PYTHONPATH=src` (or an editable install):
 langgraph dev
 ```
 
-`langgraph.json` must live in the repo root — LangSmith / `langgraph deploy` reads it for graphs, deps, and env file.
-
 Optional env for the planner → orchestrator handoff:
 
 - By default the planner uses `langgraph_sdk.get_client(url=None)` (**in-process** ASGI) so you do **not** need the public deployment URL before deploy.
@@ -75,8 +63,6 @@ Optional env for the planner → orchestrator handoff:
 - `ORCHESTRATOR_ASSISTANT_ID` — graph/assistant name (default `orchestrator`)
 
 `start_research_run` enqueues the **orchestrator** graph via `runs.create` (platform background run).
-
-Plan / scrape / run **status** use the Agent Server Store (`runtime.store` / `get_store()`). Detailed pair rows go to your app DB table `research_run_results`.
 
 Chat with the **planner** graph to confirm a plan and scrape target, then start a research run. Poll status via the planner’s status tool; inspect detailed rows in `research_run_results`.
 
