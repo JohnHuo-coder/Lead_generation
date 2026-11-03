@@ -3,6 +3,7 @@
 *.pem
 *.key
 *.json
+!langgraph.json
 
 # Python cache/build
 __pycache__/

@@ -65,13 +65,16 @@ From the project root, with `PYTHONPATH=src` (or an editable install):
 langgraph dev
 ```
 
-Optional env for the planner → orchestrator handoff (defaults work with local `langgraph dev`):
+`langgraph.json` must live in the repo root — LangSmith / `langgraph deploy` reads it for graphs, deps, and env file.
 
-- `LANGGRAPH_API_URL` — API base URL (default `http://127.0.0.1:2024`)
-- `LANGGRAPH_API_KEY` or `LANGSMITH_API_KEY` — required for cloud deploys
+Optional env for the planner → orchestrator handoff:
+
+- By default the planner uses `langgraph_sdk.get_client(url=None)` (**in-process** ASGI) so you do **not** need the public deployment URL before deploy.
+- `LANGGRAPH_API_URL` / `LANGGRAPH_DEPLOYMENT_URL` — only if calling a *remote* Agent Server
+- `LANGGRAPH_API_KEY` or `LANGSMITH_API_KEY` — when talking to a remote / cloud API
 - `ORCHESTRATOR_ASSISTANT_ID` — graph/assistant name (default `orchestrator`)
 
-`start_research_run` enqueues the **orchestrator** graph via `langgraph_sdk` `runs.create` (platform-managed background run), not a local thread.
+`start_research_run` enqueues the **orchestrator** graph via `runs.create` (platform background run).
 
 Chat with the **planner** graph to confirm a plan and scrape target, then start a research run. Poll status via the planner’s status tool; inspect detailed rows in `research_run_results`.
 

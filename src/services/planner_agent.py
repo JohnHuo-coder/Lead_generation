@@ -1,18 +1,19 @@
 from __future__ import annotations
 
+import asyncio
 import logging
 import os
 import re
 import threading
 import uuid
 from datetime import datetime, timezone
-from typing import Any
+from typing import Any, Coroutine, TypeVar
 
 from langchain.agents import create_agent
 from langchain.messages import ToolMessage
 from langchain.tools import ToolRuntime, tool
 from langgraph.types import Command
-from langgraph_sdk import get_sync_client
+from langgraph_sdk import get_client
 from pydantic import BaseModel, Field
 
 from components.state import PlannerAgentState
@@ -44,13 +45,46 @@ _CONFIRM_ONLY_RE = re.compile(
 )
 
 
-def _langgraph_api_client():
-    """Client for the LangGraph API (local `langgraph dev` or cloud deploy)."""
-    url = os.getenv("LANGGRAPH_API_URL") or os.getenv(
-        "LANGGRAPH_DEPLOYMENT_URL", "http://127.0.0.1:2024"
+_T = TypeVar("_T")
+
+
+def _langgraph_api_url() -> str | None:
+    """Optional remote URL override; ``None`` means in-process Agent Server.
+
+    Inside ``langgraph dev`` / ``up`` / LangSmith deploy, prefer ``url=None`` so
+    ``get_client`` uses the ASGI loopback and no public deployment URL is
+    required before deploy. Set ``LANGGRAPH_API_URL`` (or
+    ``LANGGRAPH_DEPLOYMENT_URL``) only to call a *different* remote server.
+    """
+    return (
+        os.getenv("LANGGRAPH_API_URL")
+        or os.getenv("LANGGRAPH_DEPLOYMENT_URL")
+        or None
     )
-    api_key = os.getenv("LANGGRAPH_API_KEY") or os.getenv("LANGSMITH_API_KEY")
-    return get_sync_client(url=url, api_key=api_key)
+
+
+def _run_coro(coro: Coroutine[Any, Any, _T]) -> _T:
+    """Run an async coroutine from sync tool code (often in a worker thread)."""
+    try:
+        asyncio.get_running_loop()
+    except RuntimeError:
+        return asyncio.run(coro)
+    # Already inside a loop: run in a fresh thread with its own loop.
+    result: dict[str, Any] = {}
+    error: dict[str, BaseException] = {}
+
+    def _target() -> None:
+        try:
+            result["value"] = asyncio.run(coro)
+        except BaseException as exc:  # noqa: BLE001 — re-raise after join
+            error["exc"] = exc
+
+    thread = threading.Thread(target=_target, name="langgraph-sdk-coro")
+    thread.start()
+    thread.join()
+    if "exc" in error:
+        raise error["exc"]
+    return result["value"]
 
 
 def _message_role(msg: Any) -> str:
@@ -239,36 +273,48 @@ def set_scrape_target(
     )
 
 
+async def _enqueue_orchestrator_run(*, user_id: str, run_id: str) -> dict[str, Any]:
+    """Create a platform thread + background orchestrator run (in-process by default)."""
+    client = get_client(url=_langgraph_api_url())
+    thread = await client.threads.create(
+        metadata={
+            "user_id": user_id,
+            "research_run_id": run_id,
+            "graph": ORCHESTRATOR_ASSISTANT_ID,
+        },
+    )
+    thread_id = thread["thread_id"]
+    run = await client.runs.create(
+        thread_id,
+        ORCHESTRATOR_ASSISTANT_ID,
+        input={"user_id": user_id, "run_id": run_id},
+        config={
+            "configurable": {
+                "user_id": user_id,
+                "run_id": run_id,
+            }
+        },
+        metadata={
+            "user_id": user_id,
+            "research_run_id": run_id,
+        },
+    )
+    return {
+        "lg_thread_id": thread_id,
+        "lg_run_id": run.get("run_id"),
+    }
+
+
 def _launch_orchestrator(*, user_id: str, run_id: str, store) -> dict[str, Any]:
     """Enqueue orchestrator as a LangGraph Platform background run.
 
-    Returns platform thread/run ids. On API failure, marks the research run
-    as error and re-raises.
+    Uses the async SDK with ``url=None`` (in-process) unless a remote URL is
+    set. Returns platform thread/run ids. On API failure, marks the research
+    run as error and re-raises.
     """
-    client = _langgraph_api_client()
     try:
-        thread = client.threads.create(
-            metadata={
-                "user_id": user_id,
-                "research_run_id": run_id,
-                "graph": ORCHESTRATOR_ASSISTANT_ID,
-            },
-        )
-        thread_id = thread["thread_id"]
-        run = client.runs.create(
-            thread_id,
-            ORCHESTRATOR_ASSISTANT_ID,
-            input={"user_id": user_id, "run_id": run_id},
-            config={
-                "configurable": {
-                    "user_id": user_id,
-                    "run_id": run_id,
-                }
-            },
-            metadata={
-                "user_id": user_id,
-                "research_run_id": run_id,
-            },
+        platform = _run_coro(
+            _enqueue_orchestrator_run(user_id=user_id, run_id=run_id)
         )
     except Exception as exc:
         logger.exception(
@@ -285,26 +331,22 @@ def _launch_orchestrator(*, user_id: str, run_id: str, store) -> dict[str, Any]:
         )
         raise
 
-    platform_run_id = run.get("run_id")
     put_run(
         store,
         run_id,
         {
-            "lg_thread_id": thread_id,
-            "lg_run_id": platform_run_id,
+            "lg_thread_id": platform["lg_thread_id"],
+            "lg_run_id": platform["lg_run_id"],
             "lg_assistant_id": ORCHESTRATOR_ASSISTANT_ID,
         },
     )
     logger.info(
         "Enqueued orchestrator research_run_id=%s lg_thread_id=%s lg_run_id=%s",
         run_id,
-        thread_id,
-        platform_run_id,
+        platform["lg_thread_id"],
+        platform["lg_run_id"],
     )
-    return {
-        "lg_thread_id": thread_id,
-        "lg_run_id": platform_run_id,
-    }
+    return platform
 
 
 @tool
@@ -391,8 +433,9 @@ def start_research_run(
                         content=(
                             f"Failed to enqueue research run {run_id} on the "
                             f"LangGraph API: {type(exc).__name__}: {exc}. "
-                            "Ensure langgraph dev / deployment is up and "
-                            "LANGGRAPH_API_URL points at it."
+                            "In-process enqueue needs to run inside "
+                            "langgraph dev / up / deploy; set "
+                            "LANGGRAPH_API_URL only to target a remote server."
                         ),
                         tool_call_id=runtime.tool_call_id,
                     )

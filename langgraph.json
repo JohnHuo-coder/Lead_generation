@@ -1,0 +1,9 @@
+{
+  "dependencies": ["."],
+  "graphs": {
+    "planner": "./src/services/planner_agent.py:planner_graph",
+    "orchestrator": "./src/graphs/orchestrator_graph.py:orchestrator_graph",
+    "research": "./src/graphs/main_graph.py:research_subgraph"
+  },
+  "env": ".env"
+}
